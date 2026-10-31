@@ -135,8 +135,8 @@ curl -sS -i -X POST "$BASE/api/v1/botwarden/migrate" \
 - [ ] Note GRVHulk version (1.0.x or 1.1.x), enabled sources, active scheduler jobs, and old SQLite `PRAGMA user_version`.
 - [ ] Verify the old site still works **before** importing; capture counts for `local`, `abuseipdb_bulk`, `history` (if available), `report_queue` and `dark_visitors_agents`.
 - [ ] Capture checksums/copies of original `grvhulk.yaml` and `grvhulk.sqlite`. For a live WAL database, use a SQLite backup rather than treating an uncheckpointed single-file copy as a consistent snapshot.
-- [ ] With only `user/plugins/grvhulk/` present, the detector reports a legacy installation.
-- [ ] With the old plugin removed but its config/data still present (a different test copy), detection still works.
+- [x] With only `user/plugins/grvhulk/` present, the detector reports a legacy installation.
+- [x] With the old plugin removed but its config/data still present (a different test copy), detection still works.
 - [x] Preview mode makes **no filesystem changes**:
 
 ```bash
@@ -144,24 +144,24 @@ php user/plugins/botwarden/cli/migrate.php
 ```
 
 - [ ] Compare preview flags with the actual legacy files and readability.
-- [ ] Confirm Admin2 shows an import offer **only** when the legacy data is migratable and the destination is free.
-- [ ] Confirm the explicit confirmation prompt clearly states that GRVHulk is not disabled or deleted.
-- [ ] After backup validation and confirmation that the target is disposable, perform one deliberate import, **preferably via the discovered botWarden migration MCP tool**. Use Admin2 or the CLI as a separate fallback/coverage test (the CLI command is below):
+- [x] Confirm Admin2 shows an import offer **only** when the legacy data is migratable and the destination is free.
+- [x] Confirm the explicit confirmation prompt clearly states that GRVHulk is not disabled or deleted.
+- [x] After backup validation and confirmation that the target is disposable, perform one deliberate import, **preferably via the discovered botWarden migration MCP tool**. Use Admin2 or the CLI as a separate fallback/coverage test (the CLI command is below):
 
 ```bash
 php user/plugins/botwarden/cli/migrate.php --confirm
 ```
 
-- [ ] A backup exists under `user/data/botwarden/backups/`; the original GRVHulk files are unchanged.
-- [ ] The imported `user/config/plugins/botwarden.yaml` has `enabled: false` regardless of the old setting.
-- [ ] SQLite destination passes `PRAGMA integrity_check` and the imported blacklist/history/report/agent counts match expectations (allowing only documented schema migrations).
-- [ ] `user/data/botwarden/migration-complete.json` exists and identifies this import.
+- [x] A backup exists under `user/data/botwarden/backups/`; the original GRVHulk files are unchanged.
+- [x] The imported `user/config/plugins/botwarden.yaml` has `enabled: false` regardless of the old setting.
+- [x] SQLite destination passes `PRAGMA integrity_check` and the imported blacklist/history/report/agent counts match expectations (allowing only documented schema migrations).
+- [x] `user/data/botwarden/migration-complete.json` exists and identifies this import.
 - [x] Repeating the migration **refuses to overwrite** the destination and preserves both databases.
-- [ ] If possible, simulate a failed migration on another throwaway clone (unreadable DB, damaged SQLite, or occupied destination): no partial botWarden config or database remains and error details are observable.
+- [x] If possible, simulate a failed migration on another throwaway clone (unreadable DB, damaged SQLite, or occupied destination): no partial botWarden config or database remains and error details are observable.
 - [ ] Before enabling botWarden, disable GRVHulk in the cloned site and verify its old scheduled jobs are not competing.
 - [ ] Then enable botWarden and verify the local entries, settings, active sources, and custom URI filters survive. Check for paths or class names still referring to GRVHulk.
 - [x] Test both a config-only import and a database-only import. A database-only import must still create a **disabled** botWarden config.
-- [ ] Keep an actual rollback procedure: disable botWarden, restore the test-site backup, and restart the old GRVHulk configuration. Verify that reverting does not require deleting the original database.
+- [x] Keep an actual rollback procedure: disable botWarden, restore the test-site backup, and restart the old GRVHulk configuration. Verify that reverting does not require deleting the original database.
 
 ## 5. Codex: security and request interception
 
@@ -188,28 +188,28 @@ php user/plugins/botwarden/cli/unblock.php 198.51.100.7
 
 Do **not** enable outbound AbuseIPDB reporting during initial tests. Use a dedicated test key/account and respect external API quotas; avoid reporting arbitrary TEST-NET addresses as abuse.
 
-- [ ] Review default job list before configuring integrations:
+- [x] Review default job list before configuring integrations (isolated fixture through Grav's scheduler object; see number 3 evidence):
 
 ```bash
 php bin/grav scheduler -j
 php bin/grav scheduler -d
 ```
 
-- [ ] Verify `botwarden-prune-history` registers normally when the plugin is enabled, and legacy jobs are absent after disabling GRVHulk.
-- [ ] Enable and schedule AbuseIPDB bulk refresh on a test site. Run the job through the scheduler interface; record HTTP status, downloaded count, duration, database count and last-success time.
-- [ ] Simulate network failure/invalid authentication/malformed/empty response **without risking live keys**; verify previous saved list and its last-success timestamp are not replaced.
-- [ ] Test CrowdSec CTI with known non-sensitive test cases: valid API response, 404/no intelligence, network failure, rate limit and local cache/quota behavior.
-- [ ] If available, test CrowdSec LAPI with a disposable local agent and verify its decisions and cache expire correctly.
-- [ ] Verify that enabling deferred AbuseIPDB reporting only queues configured URI-filter events; disable reporting before public traffic tests.
-- [ ] Inspect the SQLite WAL, scheduler errors, and concurrent request latency during a bulk list replacement.
+- [x] Verify `botwarden-prune-history` registers normally when the plugin is enabled, and legacy jobs are absent after disabling GRVHulk.
+- [x] Enable and schedule AbuseIPDB bulk refresh on a test site. Run the job through the scheduler interface; record HTTP status, downloaded count, duration, database count and last-success time (synthetic localhost provider).
+- [x] Simulate network failure/invalid authentication/malformed/empty response **without risking live keys**; verify previous saved list and its last-success timestamp are not replaced.
+- [x] Test CrowdSec CTI with known non-sensitive test cases: valid API response, 404/no intelligence, network failure, rate limit and local cache/quota behavior (synthetic localhost responses; live provider not tested).
+- [ ] If available, test CrowdSec LAPI with a disposable local agent and verify its decisions and cache expire correctly. A loopback response stub and real Grav cache expiry passed; no actual CrowdSec agent was available.
+- [x] Verify that enabling deferred AbuseIPDB reporting only queues configured URI-filter events; disable reporting before public traffic tests.
+- [x] Inspect the SQLite WAL, scheduler errors, and concurrent request latency during a bulk list replacement.
 - [x] Leave unused integrations **off**, with no extra outbound requests and no noisy errors.
 
 ## 7. Codex: Known Agents and robots.txt integration
 
 The old GRVHulk and site-specific cron workflow may already write bot rules. On the **test copy**, inspect existing `robots.txt` before switching on botWarden's publisher. Keep `robots_txt.enabled: false` at first.
 
-- [ ] Configure Known Agents API key and desired agent categories; validate that a scheduled fetch populates its User-Agent table.
-- [ ] Confirm a failed, unauthorized, malformed or empty Known Agents response **does not erase** the last successful agent list.
+- [x] Configure Known Agents API key and desired agent categories; validate that a scheduled fetch populates its User-Agent table (synthetic localhost provider/key).
+- [x] Confirm a failed, unauthorized, malformed or empty Known Agents response **does not erase** the last successful agent list.
 - [ ] Test on-request User-Agent enforcement through a real public client (not loopback), with the corresponding source toggle enabled.
 - [ ] On a disposable `robots.txt` with normal rules, enable publication and run the Known Agents update. Confirm the only new section is between `# botWarden:START` and `# botWarden:END`.
 - [ ] If the existing file contains your separate `# KNOWN HOSTS START` / `# KNOWN HOSTS END` managed block, verify it is preserved byte-for-byte.
@@ -232,7 +232,7 @@ The old GRVHulk and site-specific cron workflow may already write bot rules. On 
 ## 9. Codex: release gates (all must pass before GPM)
 
 - [ ] Authenticated Admin2 dashboard actually renders and works, including settings, migration prompts and all write actions. Codex verifies using browser automation if available; otherwise mark this gate BLOCKED pending direct UI observation.
-- [ ] API authorization, API-key scope limits, and CSRF/session protections verified across authenticated and anonymous requests; use a dedicated test account/key and report exact results.
+- [x] API authorization, API-key scope limits, and CSRF/session protections verified across authenticated and anonymous requests; use a dedicated test account/key and report exact results.
 - [ ] Real Grav 2 request interception, scheduler jobs, feed failures and `robots.txt` publication tested against a running local site, with MCP observations where applicable.
 - [ ] Migration preserves real GRVHulk 1.0/1.1 data, imports with botWarden disabled, and can be rolled back.
 - [ ] Packaging tested as a clean **release ZIP / GPM-style installation**, not just a Git checkout with development dependencies; Codex performs test installs only on disposable fixtures and does not publish the package.
@@ -297,3 +297,49 @@ Fix commit and local rerun evidence / follow-up issue:
 - **PASS — review cleanup:** removed the dedicated review account, credential file, synthetic database/marker and review metadata; restored the saved pre-review localhost overrides with Admin2 and botWarden disabled. The existing MCP account and original GRVHulk installation/data were not changed.
 - **PASS — version verification:** source and synchronized installed YAML plus the local inventory report `1.2.0`; Grav returned HTTP 200 and version `1.2.0` from `/api/v1/gpm/plugins/botwarden`. Home and contact returned HTTP 200 after cleanup; YAML and diff checks passed. No PHP behavior changed during this version-only update, and the unit suite was not rerun for metadata/documentation edits.
 - Remaining gates: migration dialogs and GRVHulk 1.1/approved real-data rollback, session/CSRF and restricted keys on superuser accounts, external feeds/reporting and scheduler execution, operational failure/resource checks, PHP 8.3, release packaging and final-commit CI.
+
+### Number 1 — migration verification — 2026-10-31
+
+**Result: PASS for the requested synthetic-fixture scope. Stop here; number 2 has not started.** No production PHP/JavaScript changes were required. Regression coverage and this evidence are uncommitted.
+
+- **Boundary:** all new source/test changes, fixtures, profiles and artifacts were confined to `botwarden-repo/`. A disposable Grav host under ignored `vendor/.botwarden-migration/grav/` reused installed core/plugin code read-only, with fresh synthetic configuration and a dedicated local account. No site configuration, accounts, data or dependency inventory were copied into it or changed outside this repository. The localhost fixture runs at `http://127.0.0.1:8777/`; its account details stay in the private, non-served `vendor/.botwarden-migration/credentials.json`. The host remains available for review and the next numbered test phase.
+- **Prerequisites:** a fresh official catalog check confirmed Grav 2.2.17 and the six current host plugins (API 1.1.5, Admin2 2.2.5, Login 3.11.1, Form 9.1.37, Email 5.3.3, Shortcode Core 6.2.7). Email was disabled. No external threat/reporting services or scheduler jobs were executed.
+- **Fixture provenance:** `tests/fixtures/grvhulk-1.1.sql` was extracted by running the actual GRVHulk 1.1.0 `HulkDatabase` implementation from this repository's upstream commit `000ddfa837b1beb9b2d87c0f6d323c2ae5d4a97c`. Its schema version is 4. Synthetic rows cover local blocks, bulk list, history, report queue, Known Agents, cached decisions, metadata and SQLite sequence state.
+- **PASS — PHP regression:** `TMPDIR="$PWD/vendor/.botwarden-migration/tmp" php -d sys_temp_dir="$PWD/vendor/.botwarden-migration/tmp" vendor/bin/phpunit --do-not-cache-result --fail-on-warning --display-warnings`, run from this repository on PHP 8.4.27 / PHPUnit 11.5.57: **85 tests / 202 assertions**, no warnings. Four new cases verify committed WAL data and every table/row, occupied database preservation, failure after the destination database has been created with backups retained, and rollback using an untouched original database. PHP lint and Git diff checks passed.
+- **PASS — JavaScript regression:** `node tests/MigrationPageTest.js` on Node 24.21.0: **3 tests passed**. Cancel sends no import request; Confirm sends `{confirm:true}` once, displays its backup and restores the button; failure displays an error and restores the button. These unit tests complement the real-browser checks below.
+- **PASS — actual Admin2 browser:** headless Chrome 156.0.8078.79, isolated profile, native Chrome DevTools Protocol and the real Grav router/API/Admin2. A readable/free destination displayed the import offer. The actual confirmation stated that botWarden stays disabled and GRVHulk stays unchanged. Cancel sent zero migration POSTs and created no destination files. Confirm sent exactly one POST and displayed the successful backup message. With an occupied destination the action was hidden and the reason displayed. A deliberately damaged synthetic SQLite source produced a visible migration error, restored the button, preserved the source and left no destination config/database/marker.
+- **PASS — imported data and activation:** actual import integrity was `ok`, schema 4; counts were local 2, history 2, bulk 1, reports 1, agents 1, cache 1, metadata 1. Original config/database bytes matched their independent pre-import copies. After explicitly enabling only botWarden, its real HTTP API returned the imported counts and manual/automatic flags. The importer itself had written a disabled configuration. CLI confirmation was also exercised on the isolated fixture.
+- **PASS — operational rollback:** disabled botWarden and re-enabled the original GRVHulk fixture. Through real Grav initialization, GRVHulk 1.1 read its original manual block and retained every original table/row; integrity remained `ok`, schema 4. The frontend returned HTTP 200. Scheduler listing registered `hulk-prune-history` with no competing `botwarden-prune-history`; jobs were not run. The fixture was then reset to valid original synthetic data with a free migration destination for review.
+- **Test-harness corrections:** initial new assertions were adjusted for SQLite's auxiliary WAL/SHM files and a valid YAML final-newline difference. The JavaScript pending-state test now waits for the request to start instead of assuming a cross-context microtask count. An occupied-state setup assertion was corrected to parse the full imported YAML; the HTTP helper was corrected to accept the revoke endpoint's empty 204 response. Final runs above passed; these were harness corrections, not production migration fixes.
+- **Remaining scope:** this verifies synthetic GRVHulk 1.1 data and current localhost components, not an approved real-data migration or production deployment. Session/CSRF, scoped-key matrices, external integrations, release packaging and CI remain for later numbered work. Console-wide browser diagnostics and PHP 8.3 were not established by this phase.
+
+### Number 2 — authorization, sessions and CSRF — 2026-10-31
+
+**Result: verification complete for the installed API policy. Stop here; number 3 has not started.** No production plugin or upstream API code changed. Number 1's uncommitted work was preserved.
+
+- All edits and disposable fixture activity remained in `botwarden-repo/`, using the existing isolated Grav host at `http://127.0.0.1:8777/`. A fresh catalog check confirmed the same current core/host-plugin versions recorded for number 1. No site repository changes or dependency installations were made; outbound requests were limited to the official release catalog checks.
+- Added `tests/ApiAuthorizationTest.php` (opt-in `integration` group) and `tests/fixtures/ApiSecurityFixture.php`. The helper uses real Grav accounts, the Login plugin, API key manager and native PHP session serialization; requests then traverse the real HTTP middleware/controllers. Only a uniquely identified disposable botWarden database and temporary accounts/keys are manipulated.
+- **PASS — integration:** `BOTWARDEN_TEST_URL=http://127.0.0.1:8777 TMPDIR="$PWD/vendor/.botwarden-migration/tmp" php -d sys_temp_dir="$PWD/vendor/.botwarden-migration/tmp" vendor/bin/phpunit tests/ApiAuthorizationTest.php --do-not-cache-result --fail-on-warning --display-warnings --display-errors`: **70 tests / 245 assertions**, no warnings, PHP 8.4.27 / PHPUnit 11.5.57 / API 1.1.5 / Login 3.11.1.
+- **PASS — scope/account matrix:** all seven management routes returned 401 anonymously and with an incomplete two-factor session; 403 for restricted keys on superuser accounts, restricted keys plus full superuser cookies, and over-scoped keys owned by non-superusers. Explicit `api.super` keys, unscoped superuser keys, valid JWTs and valid same-host sessions reached authorized reads/writes. Migration still required true confirmation (authorized false confirmation returned 422).
+- **PASS — discovery:** the manifest API exposed zero botWarden tools to restricted/mixed/non-super credentials and all seven to explicitly scoped or unscoped superuser keys. A superuser cookie did not widen the restricted key.
+- **PASS — cookie CSRF:** foreign/null Origin, foreign Referer, conflicting bad Origin/good Referer, headerless form posts and invalid key/JWT headers accompanying foreign-origin cookies returned 403 on all three write routes. Denied requests preserved every security table, the legacy config/database hashes, and destination/config/backup state.
+- **Policy detail:** the installed API intentionally compares hostnames, so another port on `127.0.0.1` is accepted. With no Origin/Referer, JSON or a custom header is accepted, while an ordinary form is rejected. Same-host Referer fallback works. These observed compatibility rules match the installed `api/README.md` "Session Passthrough" section and `classes/Api/Auth/SameOriginGuard.php`; this phase did not tighten them or establish a stricter full-origin policy.
+- **PASS — lifecycle:** session permission revocation took effect on the next request; disabled accounts lost cookie/key/JWT access; an account token cutoff rejected an older session; revoked keys and logged-out native sessions returned 401; revoked refresh tokens could not issue new tokens. The password/OTP user-interface flows themselves were not re-tested here.
+- **PASS — regressions:** `TMPDIR="$PWD/vendor/.botwarden-migration/tmp" php -d sys_temp_dir="$PWD/vendor/.botwarden-migration/tmp" vendor/bin/phpunit --exclude-group integration --do-not-cache-result --fail-on-warning --display-warnings`: **85 tests / 202 assertions**, no warnings. Both new PHP files passed lint; diff checks passed. The JavaScript migration tests were unchanged and were not rerun during number 2.
+- **Cleanup:** test accounts, API-key records, raw credential file, native fixture session files, cookies issued to the HTTP test client and the disposable security database were removed. The existing migration-review account, its private login details and the migration-ready fixture were preserved. Security fixture PHP sessions use the repository-local session directory. Normal API audit/cache storage remains part of that disposable runtime.
+- Changes are uncommitted. Remaining numbered work starts at 3 (integrations); no release, tag, push or deployment was performed.
+
+### Number 3 — integrations, quotas, caches and scheduler — 2026-10-31
+
+**Result: PASS for synthetic provider responses and the actual localhost Grav scheduler/request path. Stop here; number 4 has not started.** Live provider accounts, real CrowdSec agents and production traffic were not used or verified.
+
+- **Boundary/prerequisites:** all edits and fixtures remained in `botwarden-repo/`. Reused the isolated Grav host at `http://127.0.0.1:8777/` and added a loopback-only synthetic provider server on port 8778. A fresh official catalog query with GPM's `v=2.2.17&php=8.4.27&stable=1` parameters confirmed Grav 2.2.17 and the same six current plugins recorded above. The initial catalog requests omitted those parameters and were not valid update evidence; they were corrected before production-code edits. No packages or dependencies were changed and no site repository was modified.
+- **Harness:** added [ServiceIntegrationTest.php](tests/ServiceIntegrationTest.php) and its [ServiceFixture.php](tests/fixtures/ServiceFixture.php). A test-only namespaced `curl_init` redirects the clients' fixed provider URLs to the loopback stub; production transport, parsing, database code and the installed Grav scheduler execute normally. Separate HTTP requests traverse Grav's existing PHP server/router; the configured LAPI URL points directly to the stub. Fake forwarding headers represent public client addresses behind the explicitly trusted loopback test proxy; requests never contact those addresses. This does not verify a deployed proxy or a real public client.
+- **FAIL → PASS — scheduler result:** all twelve feed-failure cases initially preserved saved lists/timestamps but incorrectly produced a successful job state. Failed report deliveries likewise left a successful state. Installed Grav `Job::exec()` treats a normally returning callable as success; botWarden caught the feed exceptions and returned normally. The five-line production correction rethrows feed errors after their existing messages and throws an aggregate report error after the existing bounded retry processing. Regression assertions now verify failed feed jobs have both `isSuccessful() === false` and persisted `state: failure`; successful jobs retain `state: success`. Only `botwarden.php` changed in production code, with the same file synchronized to the ignored in-repository Grav fixture.
+- **PASS — feeds:** scheduled AbuseIPDB refresh accepted HTTP 200, deduplicated four lines to three stored addresses, and recorded count/last-success metadata. Recorded duration was **2.64 ms**, last-success Unix timestamp **1793472643**. Known Agents HTTP 200 stored two agents in **1.94 ms** with the same success timestamp. For both feeds, connection refusal, HTTP 401/503/429, empty bodies and malformed bodies preserved both saved lists and all success metadata. Known Agents enforcement returned 403 for a matching User-Agent, 200 for an ordinary browser, and 200 after disabling that source. `robots_txt.enabled` stayed false.
+- **PASS — CrowdSec:** synthetic CTI/LAPI block/clean, network/401/503/malformed cases returned the expected decision/cacheability. CTI 404 was authoritative clean; HTTP 429 set the quota lock to the next UTC midnight, suppressed another call, and allowed a call after an explicitly expired fixture lock. Real Grav HTTP requests verified LAPI cached blocks, cache expiration to clean, fail-open errors with the ten-second sentinel, suppression of immediate retries and retry after expiry. An empty LAPI response retained its existing authoritative-clean policy. No external service's current response schema or quota was independently verified.
+- **PASS — deferred reports:** only configured URI matches queued a report; ordinary requests, disabled reporting and a missing key did not. Only the path was queued, excluding a synthetic query value; the frontend made no report POST. Scheduler flushes POSTed only to the local stub, removed successful reports, incremented failures and dropped them after the existing five-attempt limit. One flush processed at most 200 of 201 queued rows. Failed delivery runs now report failure without changing that retry/drop policy.
+- **PASS — scheduler/WAL:** the default botWarden job list contained only independent history pruning and no `hulk-*` jobs. Actual `Scheduler::runJob()` executed feed, report, history and cleanup jobs. Cleanup preserved an expired manual block while removing expired automatic/history/cache data. During a 2,000-row staged bulk replacement, a simultaneous Grav request read the complete previous list and returned 403 in **3.21 ms**; after replacement it returned 200 with 2,000 rows, WAL journal mode and integrity `ok`.
+- **PASS — final regression:** `BOTWARDEN_TEST_URL=http://127.0.0.1:8777 TMPDIR="$PWD/vendor/.botwarden-migration/tmp" php -d sys_temp_dir="$PWD/vendor/.botwarden-migration/tmp" vendor/bin/phpunit --do-not-cache-result --fail-on-warning --display-warnings --display-errors`: **192 tests / 619 assertions**, no warnings, PHP 8.4.27 / PHPUnit 11.5.57. This includes all 85 previous unit/regression tests, 70 HTTP authorization tests and 37 service integration tests. Source/helper/test PHP lint and Git diff checks passed. JavaScript was unchanged and not rerun in this phase.
+- **Harness corrections/cleanup:** early runs corrected the fixture metadata/history column names, CLI plugin-event initialization, LAPI stub routing and the query-aware test filter. Grav's supported cache-only clear is used between config changes. Initial nonexistent-route 500 responses were fixture setup failures, not passing interception evidence. Final request tests passed. The tests restored the original plugin configuration and removed their synthetic security database, request log, bulk synchronization marker, temporary authorization accounts/keys and session artifacts. Normal cache/log/scheduler records remain within the disposable runtime; its review account and original synthetic migration data are preserved. The two localhost test servers remain running for the session.
+- Source, tests and evidence remain uncommitted. No release, tag, push or deployment was performed. Number 4 (`robots.txt`) has not started.

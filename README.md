@@ -38,12 +38,17 @@ Use the existing Grav MCP Server plugin to discover these tools through `tools/l
 Clone into `user/plugins/botwarden`; do not replace the original plugin folder.
 This branch has not yet completed clean-install integration testing.
 
-Local verification on 2026-10-31 passed 81 PHPUnit tests (161 assertions), MCP discovery and authorization, block operations, Grav HTTP interception, and synthetic GRVHulk 1.0.0 migration checks on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5 / MCP Server 1.8.0. The owner subsequently confirmed the browser checklist passed: dashboard, pagination, block/unblock dialogs, validation, settings persistence and login/logout. Migration dialogs, external integrations, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
+Local verification on 2026-10-31 passed 192 PHPUnit tests (619 assertions), including 85 unit/regression tests, 70 HTTP authorization tests and 37 synthetic service integration tests, on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5. Three JavaScript migration-dialog tests and earlier MCP discovery, block operations, Grav HTTP interception and synthetic GRVHulk 1.0.0/1.1.0 migration checks also passed. The MCP checks used MCP Server 1.8.0. The owner confirmed the browser checklist passed: dashboard, pagination, block/unblock dialogs, validation, settings persistence and login/logout. Headless Chrome subsequently verified migration offers, Cancel/Confirm, occupied destinations and failed-import error handling against an isolated GRVHulk 1.1 fixture. Live provider services, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
 
 ```bash
 composer install
 composer test
+node tests/MigrationPageTest.js
 ```
+
+The `integration` PHPUnit group additionally tests real HTTP authorization against the disposable repository-local Grav fixture. It is skipped unless `BOTWARDEN_TEST_URL=http://127.0.0.1:8777` is set. Run `BOTWARDEN_TEST_URL=http://127.0.0.1:8777 php vendor/bin/phpunit tests/ApiAuthorizationTest.php --do-not-cache-result --fail-on-warning` after preparing that fixture. Temporary accounts, API keys, native PHP sessions and security data are created and removed by the tests. On 2026-10-31, all 70 integration tests (245 assertions) passed. Session writes follow the installed API's documented hostname-based Origin/Referer policy, including acceptance of another port on the same host; JSON/custom-header fallbacks apply when those headers are absent.
+
+`tests/ServiceIntegrationTest.php` uses the same disposable Grav host plus a synthetic provider server. From this repository, start `php -S 127.0.0.1:8778 -t vendor/.botwarden-migration/tmp tests/fixtures/ServiceFixture.php`, then run `BOTWARDEN_TEST_URL=http://127.0.0.1:8777 php vendor/bin/phpunit tests/ServiceIntegrationTest.php --do-not-cache-result --fail-on-warning`. Its CLI helper redirects fixed provider URLs to localhost before the real cURL transport runs; web requests use a configured loopback LAPI stub. No live keys or external reports are used. Tests restore the fixture's plugin configuration and remove their synthetic database and request log. Feed/report failures must appear as failures in Grav's scheduler state; existing lists, last-success times and the bounded report retry policy are retained.
 
 ### Configuration
 

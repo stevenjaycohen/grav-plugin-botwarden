@@ -487,6 +487,7 @@ class BotwardenPlugin extends Plugin
             echo "Warden: AbuseIPDB bulk updated ({$count} IPs).\n";
         } catch (\Throwable $e) {
             echo "Warden: AbuseIPDB bulk update failed: " . $e->getMessage() . "\n";
+            throw $e;
         }
     }
 
@@ -524,6 +525,7 @@ class BotwardenPlugin extends Plugin
             echo "Warden: Known Agents list updated ({$count} user-agents).\n";
         } catch (\Throwable $e) {
             echo "Warden: Known Agents update failed: " . $e->getMessage() . "\n";
+            throw $e;
         }
     }
 
@@ -560,5 +562,8 @@ class BotwardenPlugin extends Plugin
         }
 
         echo "Warden: flushed {$sent} queued AbuseIPDB report(s), {$failed} deferred.\n";
+        if ($failed > 0) {
+            throw new \RuntimeException("AbuseIPDB report flush failed for {$failed} report(s)");
+        }
     }
 }
