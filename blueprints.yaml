@@ -16,6 +16,7 @@ license: MIT
 dependencies:
   - { name: grav, version: '>=2.0.0' }
   - { name: admin2, version: '>=2.0.0' }
+  - { name: api, version: '>=1.0.0' }
 
 form:
   validation: loose
@@ -337,3 +338,14 @@ form:
         wso\.php
         # .env file access
         \.env$
+
+    robots_txt.enabled:
+      type: toggle
+      label: Publish Known Agents to robots.txt
+      help: "Opt in to editing only botWarden's marked section of the website root robots.txt; requires the Known Agents API key and a working Grav scheduler. Existing file is backed up before every change."
+      default: 0
+      options:
+        1: PLUGIN_ADMIN.ENABLED
+        0: PLUGIN_ADMIN.DISABLED
+      validate:
+        type: bool

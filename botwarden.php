@@ -32,6 +32,9 @@ class BotwardenPlugin extends Plugin
     {
         return [
             'onPluginsInitialized' => ['onPluginsInitialized', 0],
+            'onApiRegisterRoutes' => ['onApiRegisterRoutes', 0],
+            'onApiSidebarItems' => ['onApiSidebarItems', 0],
+            'onApiPluginPageInfo' => ['onApiPluginPageInfo', 0],
         ];
     }
 
@@ -61,14 +64,7 @@ class BotwardenPlugin extends Plugin
             'onSchedulerInitialized' => ['onSchedulerInitialized', 0],
         ]);
 
-        if (!$this->isAdmin()) {
-            return;
-        }
 
-        $this->enable([
-            'onAdminMenu' => ['onAdminMenu', 0],
-            'onAdminTwigTemplatePaths' => ['onAdminTwigTemplatePaths', 0],
-        ]);
     }
 
     /**
@@ -82,20 +78,14 @@ class BotwardenPlugin extends Plugin
     {
         $config = $this->config();
 
-        // Handle admin JSON API
+        // The API/Admin2 endpoints authenticate independently; never block our
+        // management interface or its login/authentication requests.
         try {
             $path = $request->getRoute()->getRoute();
         } catch (\Throwable $e) {
-            $path = $_SERVER['REQUEST_URI'] ?? '';
+            $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
         }
-
-        if ($this->isAdmin() && $this->grav['user']->authenticated && $path === '/admin/botwarden/data') {
-            $this->handleAdminApi($request);
-            return;
-        }
-
-        // Never block admin area — locking out the admin defeats the purpose of management
-        if ($this->isAdmin()) {
+        if ($this->isAdmin() || preg_match('~^/(?:admin|api/v1)(?:/|$)~', $path)) {
             return;
         }
 
@@ -258,95 +248,6 @@ class BotwardenPlugin extends Plugin
     }
 
     // -------------------------------------------------------------------------
-    // Admin JSON API  (POST /admin/botwarden/data)
-    // -------------------------------------------------------------------------
-
-    private function handleAdminApi($request): void
-    {
-        // Require an admin-level permission, not merely an authenticated session,
-        // before any state-changing blacklist action runs.
-        $user = $this->grav['user'];
-        if (!$user->authorize('admin.users') && !$user->authorize('admin.super')) {
-            $request->setResponse(new Response(403, ['Content-Type' => 'application/json'], json_encode(['error' => 'Forbidden'])));
-            return;
-        }
-
-        try {
-            $body = (array)$request->getRequest()->getParsedBody();
-        } catch (\Throwable $e) {
-            $body = [];
-        }
-
-        // CSRF protection: state-changing admin actions require a valid nonce.
-        $nonce = $body['admin-nonce'] ?? ($_SERVER['HTTP_X_ADMIN_NONCE'] ?? '');
-        if (!Utils::verifyNonce($nonce, 'admin-form')) {
-            $request->setResponse(new Response(403, ['Content-Type' => 'application/json'], json_encode(['error' => 'Invalid security token'])));
-            return;
-        }
-
-        $action  = $body['action'] ?? '';
-        $db      = $this->getDb();
-        $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
-
-        switch ($action) {
-            case 'stats':
-                $data = BotwardenDatabase::getStats($db, $dataDir);
-                break;
-
-            case 'local-list':
-                $limit  = min((int)($body['limit'] ?? 50), 200);
-                $offset = max((int)($body['offset'] ?? 0), 0);
-                $data   = [
-                    'entries' => BotwardenDatabase::getLocalPaginated($db, $limit, $offset),
-                    'total'   => BotwardenDatabase::getLocalCount($db),
-                    'limit'   => $limit,
-                    'offset'  => $offset,
-                ];
-                break;
-
-            case 'search':
-                $entry = BotwardenDatabase::searchLocal($db, $body['ip'] ?? '');
-                $data  = ['found' => $entry !== null, 'entry' => $entry];
-                break;
-
-            case 'add':
-                $ip     = trim($body['ip'] ?? '');
-                $reason = trim($body['reason'] ?? 'Manual');
-                if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-                    $request->setResponse(new Response(400, [], json_encode(['error' => 'Invalid IP address'])));
-                    return;
-                }
-                // Manual entries are exempt from TTL expiry and auto-clean trimming.
-                BotwardenDatabase::addIpToLocal($db, $ip, $reason, true);
-                $data = ['success' => true];
-                break;
-
-            case 'remove':
-                $ip = trim($body['ip'] ?? '');
-                BotwardenDatabase::removeIpFromLocal($db, $ip);
-                $data = ['success' => true];
-                break;
-
-            case 'history':
-                $limit  = min((int)($body['limit'] ?? 50), 200);
-                $offset = max((int)($body['offset'] ?? 0), 0);
-                $data   = [
-                    'entries' => BotwardenDatabase::getHistory($db, $limit, $offset),
-                    'total'   => BotwardenDatabase::getHistoryCount($db),
-                    'limit'   => $limit,
-                    'offset'  => $offset,
-                ];
-                break;
-
-            default:
-                $request->setResponse(new Response(400, [], json_encode(['error' => 'Unknown action: ' . $action])));
-                return;
-        }
-
-        $request->setResponse(new Response(200, ['Content-Type' => 'application/json'], json_encode($data)));
-    }
-
-    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
@@ -415,6 +316,50 @@ class BotwardenPlugin extends Plugin
     }
 
     // -------------------------------------------------------------------------
+    // Grav 2 API / Admin2 integration (no classic Admin hooks or Twig routes).
+    // -------------------------------------------------------------------------
+
+    public function onApiRegisterRoutes(Event $event): void
+    {
+        $routes = $event['routes'];
+        $controller = \Grav\Plugin\Botwarden\BotwardenApiController::class;
+        $routes->get('/botwarden/status', [$controller, 'status']);
+        $routes->get('/botwarden/legacy', [$controller, 'legacy']);
+        $routes->post('/botwarden/migrate', [$controller, 'migrateLegacy']);
+        $routes->get('/botwarden/blocks', [$controller, 'blocks']);
+        $routes->get('/botwarden/history', [$controller, 'history']);
+        $routes->post('/botwarden/blocks', [$controller, 'addBlock']);
+        $routes->post('/botwarden/unblock', [$controller, 'removeBlock']);
+    }
+
+    public function onApiSidebarItems(Event $event): void
+    {
+        $items = $event['items'] ?? [];
+        $items[] = [
+            'id' => 'botwarden',
+            'plugin' => 'botwarden',
+            'label' => 'botWarden',
+            'icon' => 'fa-shield',
+            'route' => '/plugin/botwarden',
+            'authorize' => 'api.super',
+            'priority' => 10,
+        ];
+        $event['items'] = $items;
+    }
+
+    public function onApiPluginPageInfo(Event $event): void
+    {
+        if (($event['plugin'] ?? '') !== 'botwarden') return;
+        $event['definition'] = [
+            'id' => 'botwarden',
+            'plugin' => 'botwarden',
+            'title' => 'botWarden Security',
+            'icon' => 'fa-shield',
+            'page_type' => 'component',
+        ];
+    }
+
+    // -------------------------------------------------------------------------
     // Scheduler
     // -------------------------------------------------------------------------
 
@@ -442,7 +387,7 @@ class BotwardenPlugin extends Plugin
             $job->at('45 2 * * *');
         }
 
-        if (!empty($config['sources']['dark_visitors']) && !empty($config['dark_visitors']['api_key'])) {
+        if ((!empty($config['sources']['dark_visitors']) || !empty($config['robots_txt']['enabled'])) && !empty($config['dark_visitors']['api_key'])) {
             $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskUpdateDarkVisitors', [], 'botwarden-dark-visitors');
             $job->backlink('plugins/botwarden');
             $job->at('0 3 * * *');
@@ -452,27 +397,6 @@ class BotwardenPlugin extends Plugin
             $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskFlushReports', [], 'botwarden-flush-reports');
             $job->backlink('plugins/botwarden');
             $job->at('*/10 * * * *');
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Admin menu
-    // -------------------------------------------------------------------------
-
-    public function onAdminMenu(): void
-    {
-        $this->grav['twig']->plugins_hooked_nav['botWarden'] = [
-            'hint'      => 'Warden IP Security Manager',
-            'route'     => 'hulk',
-            'icon'      => 'fa-shield',
-            'authorize' => 'admin.users',
-        ];
-    }
-
-    public function onAdminTwigTemplatePaths(Event $event): void
-    {
-        if (in_array($this->grav['uri']->route(), ['/admin/hulk'], true)) {
-            $event['paths'] = array_merge($event['paths'], [__DIR__ . '/admin/templates']);
         }
     }
 
@@ -566,8 +490,19 @@ class BotwardenPlugin extends Plugin
         $types   = self::normalizeAgentTypes($config['dark_visitors']['agent_types'] ?? []);
 
         try {
-            $agents = $client->fetchAgents($types);
+            $text = $client->fetchRobotsTxt($types);
+            $agents = DarkVisitorsClient::parseAgents($text);
             BotwardenDatabase::replaceDarkVisitorsAgents($db, $agents);
+            if (!empty($config['robots_txt']['enabled'])) {
+                if (!defined('GRAV_ROOT')) {
+                    throw new \RuntimeException('GRAV_ROOT is unavailable for robots.txt');
+                }
+                \Grav\Plugin\Botwarden\RobotsTxtManager::publish(
+                    GRAV_ROOT . '/robots.txt',
+                    $agents,
+                    $dataDir . '/backups'
+                );
+            }
             BotwardenDatabase::setMeta($db, 'dark_visitors_updated', (string)time());
             $count = count($agents);
             echo "Warden: Known Agents list updated ({$count} user-agents).\n";
