@@ -1,101 +1,59 @@
 <?php
 namespace Grav\Plugin\Botwarden;
 
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
-use Generator;
-
-/**
- * AbuseIPDB v2 API client.
- * Fail-open: all exceptions return 'clean' decision.
- */
-class AbuseIpDbClient
+/** AbuseIPDB bulk list and deferred reports. Network failures never return an empty success. */
+final class AbuseIpDbClient
 {
-    private Client $http;
-    private array $config;
+    public function __construct(private array $config) {}
 
-    public function __construct(array $config)
-    {
-        $this->config = $config;
-        $this->http = new Client([
-            'base_uri'        => 'https://api.abuseipdb.com',
-            'timeout'         => 5.0,
-            'connect_timeout' => 3.0,
-            'headers'         => [
-                'Key'    => $config['api_key'] ?? '',
-                'Accept' => 'application/json',
-            ],
-        ]);
-    }
-
-    /**
-     * Fetch bulk IP blacklist as a streaming generator.
-     * Yields string IP addresses one by one to avoid loading all into memory.
-     * Uses Accept: text/plain (newline-delimited IPs).
-     */
-    public function fetchBulkBlacklist(int $limit = 10000): Generator
+    /** @return string[] */
+    public function fetchBulkBlacklist(int $limit = 10000): array
     {
         if (empty($this->config['api_key'])) {
-            return;
+            throw new \RuntimeException('AbuseIPDB API key is not configured');
         }
-
-        try {
-            $response = $this->http->get('/api/v2/blacklist', [
-                'query'   => ['limit' => $limit],
-                'headers' => ['Accept' => 'text/plain'],
-                'stream'  => true,
-            ]);
-
-            $body   = $response->getBody();
-            $buffer = '';
-            // Guard against a malformed/hostile response with no newlines, which
-            // would otherwise grow $buffer until memory is exhausted. No valid
-            // line (an IP) approaches this size.
-            $maxLineBytes = 64 * 1024;
-
-            while (!$body->eof()) {
-                $buffer .= $body->read(8192);
-                while (($pos = strpos($buffer, "\n")) !== false) {
-                    $line = trim(substr($buffer, 0, $pos));
-                    $buffer = substr($buffer, $pos + 1);
-                    if ($line !== '' && $line[0] !== '#' && filter_var($line, FILTER_VALIDATE_IP)) {
-                        yield $line;
-                    }
-                }
-                if (strlen($buffer) > $maxLineBytes) {
-                    // Pathological response — abort rather than exhaust memory.
-                    return;
-                }
-            }
-            // Last line without newline
-            $line = trim($buffer);
-            if ($line !== '' && $line[0] !== '#' && filter_var($line, FILTER_VALIDATE_IP)) {
-                yield $line;
-            }
-        } catch (GuzzleException $e) {
-            // Yield nothing on error
-        }
+        $response = HttpClient::request(
+            'GET',
+            'https://api.abuseipdb.com/api/v2/blacklist?limit=' . max(1, min($limit, 500000)),
+            ['Key: ' . $this->config['api_key'], 'Accept: text/plain']
+        );
+        return self::parseBlacklist(HttpClient::requireSuccess($response, 'AbuseIPDB'));
     }
 
-    /**
-     * Report an IP to AbuseIPDB (category 21 = Web App Attack).
-     */
+    /** Strict validation before changing persistent data. */
+    public static function parseBlacklist(string $body): array
+    {
+        $ips = [];
+        foreach (preg_split('/\r\n|\r|\n/', $body) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') continue;
+            if (strlen($line) > 50 || !filter_var($line, FILTER_VALIDATE_IP)) {
+                throw new \RuntimeException('AbuseIPDB returned malformed blacklist content');
+            }
+            $ips[$line] = $line;
+        }
+        if (!$ips) {
+            throw new \RuntimeException('AbuseIPDB returned an empty blacklist; existing list preserved');
+        }
+        return array_values($ips);
+    }
+
     public function reportIp(string $ip, string $path, int $category = 21): bool
     {
-        if (empty($this->config['api_key'])) {
-            return false;
-        }
-
+        if (empty($this->config['api_key'])) return false;
         try {
-            $response = $this->http->post('/api/v2/report', [
-                'form_params' => [
-                    'ip'         => $ip,
-                    'categories' => (string)$category,
-                    'comment'    => 'Blocked by botWarden. Path: ' . substr($path, 0, 500),
-                ],
-            ]);
-            return $response->getStatusCode() === 200;
-        } catch (GuzzleException $e) {
+            $response = HttpClient::request(
+                'POST',
+                'https://api.abuseipdb.com/api/v2/report',
+                ['Key: ' . $this->config['api_key'], 'Accept: application/json', 'Content-Type: application/x-www-form-urlencoded'],
+                http_build_query([
+                    'ip' => $ip, 'categories' => (string)$category,
+                    'comment' => 'Blocked by botWarden. Path: ' . substr($path, 0, 500),
+                ])
+            );
+            return $response['status'] === 200;
+        } catch (\Throwable $error) {
+            error_log('[botWarden] AbuseIPDB report failed: ' . $error->getMessage());
             return false;
         }
     }

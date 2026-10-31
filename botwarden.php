@@ -41,7 +41,7 @@ class BotwardenPlugin extends Plugin
             return require __DIR__ . '/vendor/autoload.php';
         }
 
-        // No local vendor — Grav 2 ships guzzlehttp/guzzle, so we only need
+        // No local vendor is required for runtime HTTP; only
         // to register our own namespace with Composer's already-loaded ClassLoader.
         $loader = new ClassLoader();
         $loader->addPsr4('Grav\\Plugin\\Botwarden\\', [__DIR__ . '/classes/']);
