@@ -113,6 +113,14 @@ final class LegacyMigration
                     } finally { $verify->close(); }
                 } finally { $source->close(); }
             }
+            $marker = $root . '/data/botwarden/migration-complete.json';
+            $metadata = json_encode(['source' => 'grvhulk', 'backup_id' => $backupId,
+                'timestamp' => gmdate('c'), 'config_copied' => $status['config_present'],
+                'database_copied' => $status['database_present']], JSON_THROW_ON_ERROR);
+            if (!self::writeNewFile($marker, $metadata . "\n")) {
+                throw new \RuntimeException('Cannot write migration marker');
+            }
+            $created[] = $marker;
             return ['success' => true, 'config_copied' => $status['config_present'],
                 'database_copied' => $status['database_present'],
                 'originals_preserved' => true, 'botwarden_enabled' => false,

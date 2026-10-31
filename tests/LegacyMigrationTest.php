@@ -45,6 +45,7 @@ final class LegacyMigrationTest extends TestCase
         $this->assertStringContainsString("logging: true\n", $new);
         $this->assertNotEmpty(glob($this->userDir . '/data/botwarden/backups/grvhulk-*.yaml'));
         $this->assertFalse(LegacyMigration::preview($this->userDir)['can_migrate']);
+        $this->assertFileExists($this->userDir . '/data/botwarden/migration-complete.json');
     }
 
     public function testConfirmationRequired(): void

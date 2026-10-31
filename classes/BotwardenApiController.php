@@ -25,10 +25,22 @@ final class BotwardenApiController extends AbstractApiController
         return BotwardenDatabase::getInstance($this->userDir() . '/data/botwarden');
     }
 
+    /** Non-creating read: dashboard must not block an eligible import. */
+    private function existingDb(): ?\SQLite3
+    {
+        $dir = $this->userDir() . '/data/botwarden';
+        if (!is_file($dir . '/botwarden.sqlite')) return null;
+        return BotwardenDatabase::getInstance($dir);
+    }
+
     public function status(ServerRequestInterface $request): ResponseInterface
     {
         $this->requirePermission($request, 'api.super');
-        $db = $this->db();
+        $db = $this->existingDb();
+        if ($db === null) {
+            return ApiResponse::create(['local_count' => 0, 'history_count' => 0,
+                'abuseipdb_bulk_count' => 0, 'dark_visitors_count' => 0]);
+        }
         return ApiResponse::create([
             'local_count' => BotwardenDatabase::getLocalCount($db),
             'history_count' => BotwardenDatabase::getHistoryCount($db),
@@ -61,7 +73,10 @@ final class BotwardenApiController extends AbstractApiController
         $query = $request->getQueryParams();
         $limit = max(1, min(200, (int)($query['limit'] ?? 50)));
         $offset = max(0, (int)($query['offset'] ?? 0));
-        $db = $this->db();
+        $db = $this->existingDb();
+        if ($db === null) {
+            return ApiResponse::create(['entries' => [], 'total' => 0, 'limit' => $limit, 'offset' => $offset]);
+        }
         return ApiResponse::create([
             'entries' => BotwardenDatabase::getLocalPaginated($db, $limit, $offset),
             'total' => BotwardenDatabase::getLocalCount($db),
@@ -75,7 +90,10 @@ final class BotwardenApiController extends AbstractApiController
         $query = $request->getQueryParams();
         $limit = max(1, min(200, (int)($query['limit'] ?? 50)));
         $offset = max(0, (int)($query['offset'] ?? 0));
-        $db = $this->db();
+        $db = $this->existingDb();
+        if ($db === null) {
+            return ApiResponse::create(['entries' => [], 'total' => 0, 'limit' => $limit, 'offset' => $offset]);
+        }
         return ApiResponse::create([
             'entries' => BotwardenDatabase::getHistory($db, $limit, $offset),
             'total' => BotwardenDatabase::getHistoryCount($db),
@@ -91,6 +109,9 @@ final class BotwardenApiController extends AbstractApiController
         if (!filter_var($ip, FILTER_VALIDATE_IP)) {
             throw new ValidationException('Invalid IP', [['field' => 'ip', 'message' => 'Valid IPv4 or IPv6 address required']]);
         }
+        if (LegacyGuard::mustDefer($this->userDir())) {
+            throw new \RuntimeException('Migrate GRVHulk before adding botWarden blocks');
+        }
         BotwardenDatabase::addIpToLocal($this->db(), $ip, substr(trim((string)($body['reason'] ?? 'Manual')), 0, 200), true);
         return ApiResponse::create(['success' => true, 'ip' => $ip]);
     }
@@ -102,6 +123,9 @@ final class BotwardenApiController extends AbstractApiController
         $ip = trim((string)($body['ip'] ?? ''));
         if (!filter_var($ip, FILTER_VALIDATE_IP)) {
             throw new ValidationException('Invalid IP', [['field' => 'ip', 'message' => 'Valid IPv4 or IPv6 address required']]);
+        }
+        if (LegacyGuard::mustDefer($this->userDir())) {
+            throw new \RuntimeException('Migrate GRVHulk before editing botWarden blocks');
         }
         BotwardenDatabase::removeIpFromLocal($this->db(), $ip);
         return ApiResponse::create(['success' => true, 'ip' => $ip]);

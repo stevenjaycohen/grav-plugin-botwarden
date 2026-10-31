@@ -12,6 +12,7 @@ use Grav\Plugin\Botwarden\CrowdSecClient;
 use Grav\Plugin\Botwarden\DarkVisitorsClient;
 use Grav\Plugin\Botwarden\BotwardenDatabase;
 use Grav\Plugin\Botwarden\IpDetector;
+use Grav\Plugin\Botwarden\LegacyGuard;
 use RocketTheme\Toolbox\Event\Event;
 use SQLite3;
 
@@ -104,6 +105,14 @@ class BotwardenPlugin extends Plugin
             if ($config['logging'] ?? false) {
                 $this->grav['log']->debug("[Warden] Whitelisted: {$ip}");
             }
+            return;
+        }
+
+        // An unmigrated GRVHulk install must not acquire a second active
+        // request blocker or create an empty botWarden DB before import.
+        $userDirectory = $this->grav['locator']->findResource('user://', true);
+        if (is_string($userDirectory)
+            && LegacyGuard::mustDefer($userDirectory)) {
             return;
         }
 
@@ -367,6 +376,13 @@ class BotwardenPlugin extends Plugin
     {
         $scheduler = $e['scheduler'];
         $config    = $this->config();
+
+        // Do not let an always-on prune task create the new database before
+        // the old GRVHulk data has been imported.
+        $userDirectory = $this->grav['locator']->findResource('user://', true);
+        if (is_string($userDirectory) && LegacyGuard::mustDefer($userDirectory)) {
+            return;
+        }
 
         if (!empty($config['auto_clean'])) {
             $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskCleanBlacklists', [], 'botwarden-auto-clean');
