@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — botWarden 1.2.0 (development)
+## 1.2.0 — 2026-10-31
 
 ### Changed
 - Continued GRVHulk's 1.1 version line as botWarden 1.2.0.
@@ -9,6 +9,7 @@
 - Moved the dashboard to Grav 2's API and Admin2 extension interfaces.
 
 ### Added
+- Tagged release publishing through GitHub Actions after unit and clean-install checks pass.
 - Release archive export exclusions and CI checks that install the ZIP through Grav's GPM installer, run migration-dialog tests and fail unit tests on warnings.
 - Robots.txt unit and scheduled HTTP regression tests for owner-rule preservation, file permissions, backups, idempotence and damaged markers.
 - Localhost service integration tests for feed failures, CrowdSec quotas/cache expiry, deferred report limits/retries, scheduler execution and concurrent SQLite WAL reads.
