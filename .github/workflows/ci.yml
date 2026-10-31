@@ -67,3 +67,25 @@ jobs:
           grep -q botwarden-prune-history "$RUNNER_TEMP/jobs.txt" || { echo "botWarden scheduler job was not registered"; exit 1; }
           echo "Grav startup and botWarden scheduler registration verified"
 
+      - name: Exercise Grav HTTP bootstrap and API routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:18771 -t "$GRAV_DIR" "$GRAV_DIR/index.php" > "$RUNNER_TEMP/grav-http.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 25); do
+            if curl -sS --max-time 3 -o "$RUNNER_TEMP/home.html" http://127.0.0.1:18771/; then break; fi
+            sleep 1
+          done
+          home_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/home.html" -w '%{http_code}' http://127.0.0.1:18771/)
+          ping_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/ping.json" -w '%{http_code}' http://127.0.0.1:18771/api/v1/ping)
+          private_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/protected.json" -w '%{http_code}' http://127.0.0.1:18771/api/v1/botwarden/status)
+          echo "Grav home: $home_status; API ping: $ping_status; botWarden protected API (anonymous): $private_status"
+          if [[ "$home_status" != "200" || "$ping_status" != "200" || ( "$private_status" != "401" && "$private_status" != "403" ) ]]; then
+            echo "Unexpected HTTP statuses; server log:"
+            tail -n 150 "$RUNNER_TEMP/grav-http.log"
+            echo "Ping response:"; cat "$RUNNER_TEMP/ping.json"
+            echo "Protected response:"; cat "$RUNNER_TEMP/protected.json"
+            exit 1
+          fi
