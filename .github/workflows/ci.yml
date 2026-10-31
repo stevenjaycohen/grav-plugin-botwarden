@@ -23,10 +23,12 @@ jobs:
         run: composer validate --no-check-publish
       - name: Validate Admin2 JavaScript syntax
         run: node --check admin-next/pages/botwarden.js
+      - name: Run migration dialog tests
+        run: node tests/MigrationPageTest.js
       - name: Install test dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
       - name: Run PHPUnit with diagnostics
-        run: php -d display_errors=1 -d error_reporting=-1 vendor/bin/phpunit --testdox
+        run: php -d display_errors=1 -d error_reporting=-1 vendor/bin/phpunit --exclude-group integration --do-not-cache-result --fail-on-warning --display-warnings --testdox
 
   grav-smoke:
     name: Grav 2 clean-install smoke test
@@ -55,13 +57,35 @@ jobs:
           test -f "$grav_root/vendor/autoload.php" || { echo "Grav vendor dependencies missing"; exit 1; }
           test -d "$grav_root/user/plugins/api" || { echo "Grav API plugin missing"; exit 1; }
           test -d "$grav_root/user/plugins/admin2" || { echo "Admin2 plugin missing"; exit 1; }
-      - name: Boot Grav with botWarden and inspect scheduler
+      - name: Build release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=zip --prefix=grav-plugin-botwarden/ --output="$RUNNER_TEMP/botwarden.zip" HEAD
+          if unzip -Z1 "$RUNNER_TEMP/botwarden.zip" | grep -E '/(vendor|tests|\.github)/|/(TODO\.md|phpunit\.xml)$'; then
+            echo "Release ZIP contains development files"
+            exit 1
+          fi
+      - name: Install release ZIP through GPM and inspect scheduler
         shell: bash
         run: |
           set -euo pipefail
           cd "$GRAV_DIR"
-          ln -s "$GITHUB_WORKSPACE" user/plugins/botwarden
-          php -d display_errors=1 -d error_reporting=-1 bin/grav clear
+          php -d display_errors=1 -d error_reporting=-1 -r '
+            define("GRAV_CLI", true);
+            define("GRAV_REQUEST_TIME", microtime(true));
+            $loader = require "vendor/autoload.php";
+            $grav = Grav\Common\Grav::instance(["loader" => $loader]);
+            $grav->setup()->initializeCli();
+            if (!Grav\Common\GPM\Installer::install(getenv("RUNNER_TEMP") . "/botwarden.zip", GRAV_ROOT, ["install_path" => "user/plugins/botwarden", "overwrite" => false])) {
+              fwrite(STDERR, "Release ZIP installation failed: " . Grav\Common\GPM\Installer::lastErrorCode() . "\n");
+              exit(1);
+            }
+            if (is_dir("user/plugins/botwarden/vendor")) {
+              throw new RuntimeException("Release ZIP unexpectedly includes development dependencies");
+            }
+          '
+          php -d display_errors=1 -d error_reporting=-1 bin/grav cache
           php -d display_errors=1 -d error_reporting=-1 bin/grav scheduler -j > "$RUNNER_TEMP/jobs.txt" 2>&1 || { cat "$RUNNER_TEMP/jobs.txt"; exit 1; }
           cat "$RUNNER_TEMP/jobs.txt"
           grep -q botwarden-prune-history "$RUNNER_TEMP/jobs.txt" || { echo "botWarden scheduler job was not registered"; exit 1; }

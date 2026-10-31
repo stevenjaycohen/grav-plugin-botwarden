@@ -36,9 +36,9 @@ Use the existing Grav MCP Server plugin to discover these tools through `tools/l
 ## Developing and testing
 
 Clone into `user/plugins/botwarden`; do not replace the original plugin folder.
-This branch has not yet completed clean-install integration testing.
+Clean release ZIP installation is verified locally on PHP 8.4.27; remote CI and live-provider checks remain outstanding.
 
-Local verification on 2026-10-31 passed 215 PHPUnit tests (761 assertions), including 102 unit/regression tests, 70 HTTP authorization tests and 43 synthetic service integration tests, on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5. Three JavaScript migration-dialog tests and earlier MCP discovery, block operations, Grav HTTP interception and synthetic GRVHulk 1.0.0/1.1.0 migration checks also passed. The MCP checks used MCP Server 1.8.0. The owner confirmed the browser checklist passed: dashboard, pagination, block/unblock dialogs, validation, settings persistence and login/logout. Headless Chrome subsequently verified migration offers, Cancel/Confirm, occupied destinations and failed-import error handling against an isolated GRVHulk 1.1 fixture. Live provider services, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
+Local verification on 2026-10-31 passed 215 PHPUnit tests (761 assertions), including 102 unit/regression tests, 70 HTTP authorization tests and 43 synthetic service integration tests, on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5. Three JavaScript migration-dialog tests and earlier MCP discovery, block operations, Grav HTTP interception and synthetic GRVHulk 1.0.0/1.1.0 migration checks also passed. The MCP checks used MCP Server 1.8.0. The owner confirmed the browser checklist passed: dashboard, pagination, block/unblock dialogs, validation, settings persistence and login/logout. Headless Chrome subsequently verified migration offers, Cancel/Confirm, occupied destinations and failed-import error handling against an isolated GRVHulk 1.1 fixture. Live provider services, PHP 8.3, real-data migration and remote CI remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
 
 ```bash
 composer install
@@ -91,9 +91,19 @@ php user/plugins/botwarden/cli/unblock.php --list
 php user/plugins/botwarden/cli/unblock.php 203.0.113.7 --whitelist
 ```
 
+## Release packaging
+
+The repository's `.gitattributes` excludes tests, CI files and local development notes from Git archives. From a committed checkout with the ignored `vendor/` directory available, create a package without overwriting an existing one:
+
+```bash
+test ! -e vendor/botwarden-1.2.0.zip && git archive --format=zip --prefix=grav-plugin-botwarden/ --output=vendor/botwarden-1.2.0.zip HEAD
+```
+
+The tested package contained 22 files, including its license, metadata and MCP manifest, with no plugin `vendor/` directory. Grav's GPM installer installed it into a clean disposable host. On PHP 8.4.27, scheduler registration/execution, public HTTP, API authorization, block/unblock operations, tool discovery and both CLI utilities passed. CI now builds and installs this ZIP for its Grav smoke test and runs the migration-dialog JavaScript tests. CI's YAML, shell blocks and inline installer PHP were checked locally; GitHub execution of the updated workflow remains outstanding. Regenerate the ZIP from the final committed tree before publishing.
+
 ## Release and GPM status
 
-This branch is under development and has **not** been released or submitted to GPM. Before a release, test on a clean Grav 2/Admin2 install, verify scheduler and security behavior with real APIs and recovery procedures, and review the GitHub Actions results.
+This branch is under development and has **not** been released or submitted to GPM. Before a release, verify security behavior with real APIs and approved real-data recovery procedures, and review GitHub Actions results for the final commit. Local release validation used PHP 8.4 at the owner's direction; declared compatibility requirements were retained. Publishing requires a separate instruction.
 
 ## Original authors and license
 
