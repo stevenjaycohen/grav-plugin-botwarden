@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased — botWarden 0.1.0 (development)
+## Unreleased — botWarden 1.2.0 (development)
 
 ### Changed
+- Continued GRVHulk's 1.1 version line as botWarden 1.2.0.
 - Renamed repository, plugin slug, namespaces, class paths and database location.
 - Replaced runtime Guzzle dependency with a PHP cURL transport.
 - Moved the dashboard to Grav 2's API and Admin2 extension interfaces.

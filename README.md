@@ -1,8 +1,10 @@
 # botWarden — security and crawler policy management for Grav 2
 
-**Pre-release development branch (0.1.0). Do not use on a production site yet.**
+**Pre-release development branch (1.2.0). Do not use on a production site yet.**
 
 botWarden is a maintained fork of [GRVHulk by horiken1216](https://github.com/horiken1216/grav-plugin-grvhulk). Its MIT license and copyright notice remain in [LICENSE](LICENSE). GRVHulk's original architecture itself credits [Ari Cooper-Davis's grav-plugin-ip-blacklist](https://github.com/aricooperdavis/grav-plugin-ip-blacklist).
+
+The fork continues GRVHulk's 1.1 version line as botWarden 1.2.0.
 
 ## Features in development
 
@@ -36,7 +38,7 @@ Use the existing Grav MCP Server plugin to discover these tools through `tools/l
 Clone into `user/plugins/botwarden`; do not replace the original plugin folder.
 This branch has not yet completed clean-install integration testing.
 
-Local verification on 2026-10-31 passed 81 PHPUnit tests (161 assertions), MCP discovery and authorization, block operations, Grav HTTP interception, and synthetic GRVHulk 1.0.0 migration checks on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5 / MCP Server 1.8.0. Browser interaction, external integrations, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
+Local verification on 2026-10-31 passed 81 PHPUnit tests (161 assertions), MCP discovery and authorization, block operations, Grav HTTP interception, and synthetic GRVHulk 1.0.0 migration checks on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5 / MCP Server 1.8.0. The owner subsequently confirmed the browser checklist passed: dashboard, pagination, block/unblock dialogs, validation, settings persistence and login/logout. Migration dialogs, external integrations, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
 
 ```bash
 composer install

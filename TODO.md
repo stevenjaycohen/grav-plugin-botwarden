@@ -94,13 +94,13 @@ Composer is for development/testing here. Runtime HTTP calls should use PHP cURL
 **Fresh-install fixture only:** Codex uses a Grav MCP configuration write where supported to enable botWarden with all remote sources and URI filters still off, then uses MCP to clear cache. Do not enable the plugin on the original GRVHulk site until migration is verified and GRVHulk is explicitly disabled.
 
 - [x] Frontend returns its normal page content (no HTTP 500, blank page, or PHP fatal).
-- [ ] Admin2 login still succeeds and logout still works.
-- [ ] botWarden appears in the Admin2 sidebar / plugin page, under the configured Admin2 base URL.
-- [ ] Opening the botWarden page loads the JS component, statistics, local blocks, block history, and migration detection.
+- [x] Admin2 login still succeeds and logout still works.
+- [x] botWarden appears in the Admin2 sidebar / plugin page, under the configured Admin2 base URL.
+- [x] Opening the botWarden page loads the JS component, statistics, local blocks, block history, and migration detection.
 - [ ] Browser developer tools: **no** 404 for `admin-next/pages/botwarden.js`, missing custom-element errors, undefined API client/dialog errors, or unhandled promise rejections.
 - [ ] Inspect the Network tab for response shapes: the API returns a `{"data": ...}` envelope. The page must consume it correctly rather than treating the envelope as flat JSON.
-- [ ] The plugin settings page renders and saves toggles without modifying unrelated settings or revealing API keys.
-- [ ] Refresh and revisit Admin2: saved preferences persist; no duplicate sidebar entries appear.
+- [x] The plugin settings page renders and saves toggles without modifying unrelated settings or revealing API keys.
+- [x] Refresh and revisit Admin2: saved preferences persist; no duplicate sidebar entries appear.
 
 **Known gap to investigate if it occurs:** the current Admin2 component uses `window.__GRAV_API` and `window.__GRAV_DIALOGS`. Confirm these are actually supplied by your installed Admin2 build. A passing PHP/JS syntax check does not prove the UI is wired correctly.
 
@@ -121,11 +121,11 @@ curl -sS -i -X POST "$BASE/api/v1/botwarden/migrate" \
 - [x] Anonymous POSTs **cannot** migrate, add blocks, or remove blocks.
 - [x] Test with a **dedicated non-super test user** using permitted auth methods (MCP key or session). Verify its permissions and confirm it cannot use protected botWarden management endpoints.
 - [x] An authorized Admin2 superuser, via discovered botWarden MCP tools once `mcp.yaml` is exposed, can read status, legacy preview, blacklist and history without 500s, malformed response envelopes or unexpected writes.
-- [ ] Add a controlled **TEST-NET** address (example `198.51.100.7`) through the UI; it appears once with the correct manual reason and a history entry.
+- [x] Add a controlled **TEST-NET** address (example `198.51.100.7`) through the UI; it appears once with the correct manual reason and a history entry.
 - [ ] Add it again and inspect whether deduplication and history behave as intended.
-- [ ] Remove it through the UI; the local row disappears and an unblock history event is present.
-- [ ] Invalid IP input (and empty input) is rejected with a useful validation message, not a fatal error.
-- [ ] Pagination works beyond 50 rows using test records only; page totals and Previous/Next state are correct.
+- [x] Remove it through the UI; the local row disappears and an unblock history event is present.
+- [x] Invalid IP input (and empty input) is rejected with a useful validation message, not a fatal error.
+- [x] Pagination works beyond 50 rows using test records only; page totals and Previous/Next state are correct.
 - [x] Verify the server does not accept a forged `X-Forwarded-For` header as a trustworthy client IP unless the **direct** connecting proxy is explicitly trusted.
 
 ## 4. Codex: legacy GRVHulk migration — isolated clone only
@@ -287,3 +287,13 @@ Fix commit and local rerun evidence / follow-up issue:
 - **PASS — GRVHulk 1.0.0 fixtures:** created a synthetic database using the installed `HulkDatabase` schema 3, keeping WAL open during import. Imported counts matched: local 2, bulk 1, agents 1, reports 1, cache 1, metadata 1. Destination integrity was `ok`; original config/database/WAL hashes were unchanged, backups and marker existed, settings stayed disabled, repeat import refused, and config-only/database-only imports passed. No real GRVHulk data or service credentials were copied into fixtures.
 - **PASS — CLI fixtures:** `cli/migrate.php` preview made no destination; `--confirm` imported synthetic data; repetition refused. `cli/unblock.php --list`, removal and `--whitelist` updated only the disposable user override and did not duplicate the address.
 - **NOT RUN — remaining release gates:** browser/UI actions, live services/reporting, real-data/GRVHulk 1.1 migration, full operational failure/resource checks, release archive and remote CI. Unchecked items above remain outstanding.
+
+### Owner browser review and version correction — 2026-10-31
+
+- **PASS — human-observed browser checklist:** the owner reported all seven requested steps completed successfully: dashboard statistics/history, 50/5 pagination, adding `198.51.100.200`, cancel/confirm unblock dialogs, blank/invalid input, settings persistence in the localhost environment, and logout/login with a single botWarden navigation entry. The review ended with 55 synthetic local rows and 57 history events, matching one block/unblock cycle.
+- The initial review login was reported as invalid; the owner requested a password reset. The local review account was updated and password login plus protected API access returned HTTP 200 before the successful browser report. No credentials are recorded here.
+- Browser results are the owner's observations, not browser automation. The seeded destination deliberately made migration unavailable; migration prompts/import, browser Console/Network inspection and session/CSRF protections are not established by this checklist.
+- **Version decision:** the owner specified v1.2 as the continuation of the forked 1.1 application. The manifest, unreleased changelog, README, preview installation and local dependency inventory use semantic version `1.2.0`. This does not create a tag, release or GPM submission.
+- **PASS — review cleanup:** removed the dedicated review account, credential file, synthetic database/marker and review metadata; restored the saved pre-review localhost overrides with Admin2 and botWarden disabled. The existing MCP account and original GRVHulk installation/data were not changed.
+- **PASS — version verification:** source and synchronized installed YAML plus the local inventory report `1.2.0`; Grav returned HTTP 200 and version `1.2.0` from `/api/v1/gpm/plugins/botwarden`. Home and contact returned HTTP 200 after cleanup; YAML and diff checks passed. No PHP behavior changed during this version-only update, and the unit suite was not rerun for metadata/documentation edits.
+- Remaining gates: migration dialogs and GRVHulk 1.1/approved real-data rollback, session/CSRF and restricted keys on superuser accounts, external feeds/reporting and scheduler execution, operational failure/resource checks, PHP 8.3, release packaging and final-commit CI.
