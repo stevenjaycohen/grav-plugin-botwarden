@@ -19,6 +19,8 @@ final class LegacyMigration
         $found['new_config_exists'] = is_file(rtrim($userDir, '/') . '/config/plugins/botwarden.yaml');
         $found['new_database_exists'] = is_file(rtrim($userDir, '/') . '/data/botwarden/botwarden.sqlite');
         $found['can_migrate'] = $found['migratable']
+            && (!$found['config_present'] || $found['config_readable'])
+            && (!$found['database_present'] || $found['database_readable'])
             && !$found['new_config_exists'] && !$found['new_database_exists'];
         return $found;
     }

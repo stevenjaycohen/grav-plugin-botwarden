@@ -21,6 +21,8 @@ jobs:
         run: find . -path './vendor' -prune -o -name '*.php' -print0 | xargs -0 -r -n1 php -d display_errors=1 -l
       - name: Validate Composer
         run: composer validate --no-check-publish
+      - name: Validate Admin2 JavaScript syntax
+        run: node --check admin-next/pages/botwarden.js
       - name: Install test dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
       - name: Run PHPUnit with diagnostics
@@ -64,3 +66,4 @@ jobs:
           cat "$RUNNER_TEMP/jobs.txt"
           grep -q botwarden-prune-history "$RUNNER_TEMP/jobs.txt" || { echo "botWarden scheduler job was not registered"; exit 1; }
           echo "Grav startup and botWarden scheduler registration verified"
+
