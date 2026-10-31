@@ -67,6 +67,9 @@ final class LegacyMigrationTest extends TestCase
 
         $import = LegacyMigration::migrate($this->userDir, true);
         $this->assertTrue($import['database_copied']);
+        $this->assertFalse($import['config_copied']);
+        $this->assertSame("enabled: false\n",
+            file_get_contents($this->userDir . '/config/plugins/botwarden.yaml'));
         $this->assertFileExists($old);
         $copy = new SQLite3($this->userDir . '/data/botwarden/botwarden.sqlite', SQLITE3_OPEN_READONLY);
         try {

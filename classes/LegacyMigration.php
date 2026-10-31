@@ -64,6 +64,19 @@ final class LegacyMigration
                 // Reserve destination exclusively to prevent concurrent migrations overwriting it.
                 if (!self::writeNewFile($newConfig, $input)) throw new \RuntimeException('Cannot create new configuration');
                 $created[] = $newConfig;
+            } else {
+                // A DB-only legacy installation still needs a disabled
+                // botWarden override; otherwise bundled enabled:true would
+                // activate two blockers immediately after importing the DB.
+                if (!is_dir(dirname($newConfig))
+                    && !mkdir(dirname($newConfig), 0750, true)
+                    && !is_dir(dirname($newConfig))) {
+                    throw new \RuntimeException('Cannot create configuration directory');
+                }
+                if (!self::writeNewFile($newConfig, "enabled: false\n")) {
+                    throw new \RuntimeException('Cannot create disabled botWarden configuration');
+                }
+                $created[] = $newConfig;
             }
             if ($status['database_present']) {
                 $source = new SQLite3($oldDb, SQLITE3_OPEN_READONLY);
