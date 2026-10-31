@@ -71,7 +71,7 @@ final class LegacyMigration
                     }
                     $schema = (int)$source->querySingle('PRAGMA user_version');
                     if ($schema > 4) throw new \RuntimeException('Unsupported future GRVHulk database schema');
-                    foreach (['local', 'abuseipdb_bulk', 'history'] as $table) {
+                    foreach (['local', 'abuseipdb_bulk'] as $table) {
                         $stmt = $source->prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name");
                         $stmt->bindValue(':name', $table, SQLITE3_TEXT);
                         if (!$stmt->execute()->fetchArray(SQLITE3_NUM)) {
@@ -85,9 +85,25 @@ final class LegacyMigration
                         if (!$source->backup($backupDb)) throw new \RuntimeException('Database snapshot failed');
                     } finally { $backupDb->close(); }
                     @chmod($backup, 0600);
-                    if (file_exists($newDb)) throw new \RuntimeException('New database already exists');
-                    if (!copy($backup, $newDb)) throw new \RuntimeException('Could not install database snapshot');
+                    // Reserve destination exclusively. copy() would overwrite a
+                    // competing migration that created the path after the check.
+                    $srcHandle = fopen($backup, 'rb');
+                    $dstHandle = @fopen($newDb, 'x');
+                    if ($srcHandle === false || $dstHandle === false) {
+                        if (is_resource($srcHandle)) fclose($srcHandle);
+                        throw new \RuntimeException('Could not reserve database destination');
+                    }
                     $created[] = $newDb;
+                    try {
+                        $sourceBytes = filesize($backup);
+                        $writtenBytes = stream_copy_to_stream($srcHandle, $dstHandle);
+                        if ($writtenBytes === false || $writtenBytes !== $sourceBytes || !fflush($dstHandle)) {
+                            throw new \RuntimeException('Could not install complete database snapshot');
+                        }
+                    } finally {
+                        fclose($srcHandle);
+                        fclose($dstHandle);
+                    }
                     @chmod($newDb, 0600);
                     $verify = new SQLite3($newDb, SQLITE3_OPEN_READONLY);
                     try {
