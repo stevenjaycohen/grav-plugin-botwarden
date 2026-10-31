@@ -25,3 +25,42 @@ jobs:
         run: composer install --prefer-dist --no-interaction --no-progress
       - name: Run PHPUnit with diagnostics
         run: php -d display_errors=1 -d error_reporting=-1 vendor/bin/phpunit --testdox
+
+  grav-smoke:
+    name: Grav 2 clean-install smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: sqlite3, curl, mbstring, gd, zip, intl
+          tools: composer:v2
+          coverage: none
+      - name: Download latest Grav 2 with Admin2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/grav-smoke"
+          curl -fL --retry 2 --connect-timeout 15 --max-time 180 \
+            -o "$RUNNER_TEMP/grav-admin.zip" \
+            https://getgrav.org/download/core/grav-admin/latest
+          unzip -q "$RUNNER_TEMP/grav-admin.zip" -d "$RUNNER_TEMP/grav-smoke"
+          entry=$(find "$RUNNER_TEMP/grav-smoke" -type f -path '*/bin/grav' -print -quit)
+          test -n "$entry" || { echo "Could not locate extracted Grav CLI"; exit 1; }
+          grav_root=$(dirname "$(dirname "$entry")")
+          echo "GRAV_DIR=$grav_root" >> "$GITHUB_ENV"
+          test -f "$grav_root/vendor/autoload.php" || { echo "Grav vendor dependencies missing"; exit 1; }
+          test -d "$grav_root/user/plugins/api" || { echo "Grav API plugin missing"; exit 1; }
+          test -d "$grav_root/user/plugins/admin2" || { echo "Admin2 plugin missing"; exit 1; }
+      - name: Boot Grav with botWarden and inspect scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GRAV_DIR"
+          ln -s "$GITHUB_WORKSPACE" user/plugins/botwarden
+          php -d display_errors=1 -d error_reporting=-1 bin/grav clear
+          php -d display_errors=1 -d error_reporting=-1 bin/grav scheduler -j > "$RUNNER_TEMP/jobs.txt" 2>&1 || { cat "$RUNNER_TEMP/jobs.txt"; exit 1; }
+          cat "$RUNNER_TEMP/jobs.txt"
+          grep -q botwarden-prune-history "$RUNNER_TEMP/jobs.txt" || { echo "botWarden scheduler job was not registered"; exit 1; }
+          echo "Grav startup and botWarden scheduler registration verified"
