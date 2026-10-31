@@ -38,7 +38,7 @@ Use the existing Grav MCP Server plugin to discover these tools through `tools/l
 Clone into `user/plugins/botwarden`; do not replace the original plugin folder.
 This branch has not yet completed clean-install integration testing.
 
-Local verification on 2026-10-31 passed 192 PHPUnit tests (619 assertions), including 85 unit/regression tests, 70 HTTP authorization tests and 37 synthetic service integration tests, on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5. Three JavaScript migration-dialog tests and earlier MCP discovery, block operations, Grav HTTP interception and synthetic GRVHulk 1.0.0/1.1.0 migration checks also passed. The MCP checks used MCP Server 1.8.0. The owner confirmed the browser checklist passed: dashboard, pagination, block/unblock dialogs, validation, settings persistence and login/logout. Headless Chrome subsequently verified migration offers, Cancel/Confirm, occupied destinations and failed-import error handling against an isolated GRVHulk 1.1 fixture. Live provider services, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
+Local verification on 2026-10-31 passed 215 PHPUnit tests (761 assertions), including 102 unit/regression tests, 70 HTTP authorization tests and 43 synthetic service integration tests, on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5. Three JavaScript migration-dialog tests and earlier MCP discovery, block operations, Grav HTTP interception and synthetic GRVHulk 1.0.0/1.1.0 migration checks also passed. The MCP checks used MCP Server 1.8.0. The owner confirmed the browser checklist passed: dashboard, pagination, block/unblock dialogs, validation, settings persistence and login/logout. Headless Chrome subsequently verified migration offers, Cancel/Confirm, occupied destinations and failed-import error handling against an isolated GRVHulk 1.1 fixture. Live provider services, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
 
 ```bash
 composer install
@@ -63,7 +63,7 @@ robots_txt:
   enabled: true
 ```
 
-This uses the Known Agents API key in `dark_visitors.api_key`. The scheduled update writes only inside botWarden's marked section in the Grav root `robots.txt`, backing up existing files in `user/data/botwarden/backups`. If the markers are corrupted, it refuses to write.
+This uses the Known Agents API key in `dark_visitors.api_key`. The scheduled update writes botWarden's marked section in the Grav root `robots.txt`, appending it when absent and preserving all existing bytes outside it, including separate Known Hosts rules. Each marker must occupy its own complete line; missing, duplicate, reversed or embedded markers cause publication to fail without changing the file. Changed files receive a timestamped backup in `user/data/botwarden/backups`; unchanged runs do not rewrite the file or create another backup. Existing file permissions are retained, backups use mode `0600`, and newly created public files use `0644`. Publishing rules and enabling User-Agent enforcement remain separate settings.
 
 ### Migrating GRVHulk
 

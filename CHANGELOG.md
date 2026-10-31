@@ -9,6 +9,7 @@
 - Moved the dashboard to Grav 2's API and Admin2 extension interfaces.
 
 ### Added
+- Robots.txt unit and scheduled HTTP regression tests for owner-rule preservation, file permissions, backups, idempotence and damaged markers.
 - Localhost service integration tests for feed failures, CrowdSec quotas/cache expiry, deferred report limits/retries, scheduler execution and concurrent SQLite WAL reads.
 - Opt-in HTTP authorization regression tests for API-key scope caps, mixed credentials, cookie CSRF checks, session/account revocation and logout.
 - GRVHulk 1.1 schema fixtures and migration regression tests for WAL snapshots, existing destinations, late-failure cleanup and rollback, plus confirmation/cancel/error dialog tests.
@@ -19,6 +20,7 @@
 - Regression tests for feed parsing and crawler policies, and GitHub Actions PHP checks.
 
 ### Fixed
+- Preserve trailing bytes when appending robots.txt rules and reject markers embedded in other text before publication can replace owner content.
 - Failed feed refreshes and report deliveries now register as failed Grav scheduler runs instead of reporting success; saved lists and report retry handling are preserved.
 - Migration reports corrupt SQLite input through an exception and rolls back without emitting a PHP warning.
 - Invalid/empty AbuseIPDB and Known Agents responses no longer erase existing security lists.

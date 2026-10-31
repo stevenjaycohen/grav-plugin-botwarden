@@ -19,6 +19,7 @@ final class ServiceIntegrationTest extends TestCase
     private static ?int $originalMode;
     private static ?int $originalMtime;
     private static bool $prepared = false;
+    private static bool $ownsRobotsFixture = false;
     private static array $observations = [];
     private SQLite3 $db;
 
@@ -32,7 +33,8 @@ final class ServiceIntegrationTest extends TestCase
         self::$work = $repo . '/vendor/.botwarden-migration/services';
         self::$data = self::$host . '/user/data/botwarden';
         self::$configPath = self::$host . '/user/config/plugins/botwarden.yaml';
-        if (realpath(self::$host) !== self::$host || file_exists(self::$work) || file_exists(self::$data) || is_link(self::$configPath)) {
+        if (realpath(self::$host) !== self::$host || file_exists(self::$work) || file_exists(self::$data) || is_link(self::$configPath)
+            || file_exists(self::$host . '/robots.txt') || is_link(self::$host . '/robots.txt')) {
             throw new \RuntimeException('Disposable service fixture paths are occupied or unsafe');
         }
         $response = self::http('/');
@@ -61,6 +63,7 @@ final class ServiceIntegrationTest extends TestCase
         self::helper(['operation' => 'clear']);
         $marker = json_decode(file_get_contents(self::$data . '/migration-complete.json'), true);
         if (($marker['purpose'] ?? '') !== 'service-integration-fixture') throw new \RuntimeException('Fixture identity changed; preserve evidence');
+        self::clearRobotsFixture();
         foreach (scandir(self::$data) as $name) {
             if ($name === '.' || $name === '..') continue;
             if (!in_array($name, ['migration-complete.json', 'botwarden.sqlite', 'botwarden.sqlite-wal', 'botwarden.sqlite-shm'], true)) {
@@ -88,7 +91,47 @@ final class ServiceIntegrationTest extends TestCase
         $this->configure([]);
     }
 
-    protected function tearDown(): void { $this->db->close(); }
+    protected function tearDown(): void
+    {
+        $this->db->close();
+        self::clearRobotsFixture();
+    }
+
+    private static function clearRobotsFixture(): void
+    {
+        $path = self::$host . '/robots.txt';
+        if (self::$ownsRobotsFixture) {
+            if (is_link($path) || !is_file($path)) throw new \RuntimeException('Unexpected robots fixture state; preserve evidence');
+            unlink($path);
+            self::$ownsRobotsFixture = false;
+        }
+        $backups = self::$data . '/backups';
+        if (is_dir($backups)) {
+            if (is_link($backups)) throw new \RuntimeException('Unexpected backup symlink; preserve evidence');
+            foreach (scandir($backups) as $name) {
+                if ($name === '.' || $name === '..') continue;
+                $file = $backups . '/' . $name;
+                if (!preg_match('/^robots-\d{8}-\d{6}-[a-f0-9]{10}\.txt$/', $name) || is_link($file) || !is_file($file)) {
+                    throw new \RuntimeException('Unexpected backup fixture; preserve evidence');
+                }
+                unlink($file);
+            }
+            rmdir($backups);
+        }
+    }
+
+    private function writeRobotsFixture(string $content): string
+    {
+        $path = self::$host . '/robots.txt';
+        $handle = fopen($path, 'x');
+        if (!$handle) throw new \RuntimeException('Robots fixture path is occupied');
+        self::$ownsRobotsFixture = true;
+        try {
+            if (fwrite($handle, $content) !== strlen($content)) throw new \RuntimeException('Incomplete robots fixture');
+        } finally { fclose($handle); }
+        chmod($path, 0640);
+        return $path;
+    }
 
     private static function baseline(): array
     {
@@ -398,5 +441,80 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertSame(200, self::http('/')['status']);
         $this->assertSame('wal', $this->db->querySingle('PRAGMA journal_mode'));
         $this->assertSame('ok', $this->db->querySingle('PRAGMA integrity_check'));
+    }
+
+    public function testScheduledRobotsPublicationPreservesOwnerRulesAndDoesNotRepeatBackups(): void
+    {
+        $prefix = "# owner policy — preserve bytes\r\nUser-agent: GoodBot\r\nAllow: /\r\n\r\n# KNOWN HOSTS START\r\nUser-agent: ExistingBot\r\nDisallow: /private\r\n# KNOWN HOSTS END\r\n\r\n";
+        $suffix = "\r\n\r\nSitemap: https://example.invalid/sitemap.xml\r\n\r\n";
+        $original = $prefix . "# botWarden:START\r\nUser-agent: OldFixtureBot\r\nDisallow: /\r\n# botWarden:END" . $suffix;
+        $path = $this->writeRobotsFixture($original);
+        $result = $this->job('botwarden-dark-visitors', 'valid', ['robots_txt' => ['enabled' => true]]);
+        $this->assertTrue($result['success']);
+        $this->assertSame('success', $result['state']);
+        $updated = file_get_contents($path);
+        $this->assertStringStartsWith($prefix, $updated);
+        $this->assertStringEndsWith($suffix, $updated);
+        $this->assertSame(1, substr_count($updated, '# botWarden:START'));
+        $this->assertStringNotContainsString('OldFixtureBot', $updated);
+        $this->assertStringContainsString("User-agent: FixtureBot\nDisallow: /", $updated);
+        clearstatcache();
+        $this->assertSame(0640, fileperms($path) & 0777);
+        $files = glob(self::$data . '/backups/robots-*.txt');
+        $this->assertCount(1, $files);
+        $this->assertSame($original, file_get_contents($files[0]));
+        $this->assertSame(0600, fileperms($files[0]) & 0777);
+        $response = self::http('/robots.txt');
+        $this->assertSame(200, $response['status']);
+        $this->assertStringContainsString('text/plain', $response['type']);
+        $this->assertSame($updated, $response['body']);
+        touch($path, time() - 120);
+        clearstatcache();
+        $mtime = filemtime($path);
+        $result = $this->job('botwarden-dark-visitors', 'valid', ['robots_txt' => ['enabled' => true]]);
+        $this->assertTrue($result['success']);
+        clearstatcache();
+        $this->assertSame($mtime, filemtime($path));
+        $this->assertSame($files, glob(self::$data . '/backups/robots-*.txt'));
+        $this->assertSame(hash('sha256', $updated), hash_file('sha256', $path));
+        $this->assertSame($updated, self::http('/robots.txt')['body']);
+    }
+
+    public function testRobotsPublicationIsOptInAndSeparateFromEnforcement(): void
+    {
+        $original = "User-agent: GoodBot\nAllow: /\n";
+        $path = $this->writeRobotsFixture($original);
+        $result = $this->job('botwarden-dark-visitors');
+        $this->assertTrue($result['success']);
+        $this->assertSame($original, file_get_contents($path));
+        $this->assertDirectoryDoesNotExist(self::$data . '/backups');
+        $result = $this->job('botwarden-dark-visitors', 'valid', ['robots_txt' => ['enabled' => true], 'sources' => ['dark_visitors' => false]]);
+        $this->assertTrue($result['success']);
+        $this->assertStringContainsString("User-agent: FixtureBot\nDisallow: /", self::http('/robots.txt')['body']);
+        $this->assertSame(200, self::http('/', '8.8.8.8', 'FixtureBot/1.0')['status']);
+        $this->configure(['sources' => ['dark_visitors' => true]]);
+        $this->assertSame(403, self::http('/', '8.8.8.8', 'FixtureBot/1.0')['status']);
+    }
+
+    public static function damagedRobotsPolicies(): iterable
+    {
+        yield 'missing end' => ["# owner policy\n# botWarden:START\nUser-agent: ExistingBot\n"];
+        yield 'missing start' => ["# owner policy\nUser-agent: ExistingBot\n# botWarden:END\n"];
+        yield 'duplicate' => ["# botWarden:START\n# botWarden:END\n# botWarden:START\n# botWarden:END\n"];
+        yield 'embedded' => ["# botWarden:START\n# owner policy # botWarden:END damaged\n"];
+    }
+
+    #[DataProvider('damagedRobotsPolicies')]
+    public function testDamagedRobotsPolicyProducesVisibleSchedulerFailure(string $original): void
+    {
+        $path = $this->writeRobotsFixture($original);
+        $result = $this->job('botwarden-dark-visitors', 'valid', ['robots_txt' => ['enabled' => true]]);
+        $this->assertFalse($result['success']);
+        $this->assertSame('failure', $result['state']);
+        $this->assertStringContainsString('markers', $result['output']);
+        $this->assertSame($original, file_get_contents($path));
+        $this->assertDirectoryDoesNotExist(self::$data . '/backups');
+        $this->assertSame([], glob(self::$host . '/.botwarden-*'));
+        $this->assertSame($original, self::http('/robots.txt')['body']);
     }
 }

@@ -15,7 +15,9 @@ final class RobotsTxtManager
     {
         $startCount = substr_count($original, self::START);
         $endCount = substr_count($original, self::END);
-        if ($startCount !== $endCount || $startCount > 1) {
+        $startLines = preg_match_all('/(?:^|[\r\n])' . preg_quote(self::START, '/') . '(?=[\r\n]|$)/', $original);
+        $endLines = preg_match_all('/(?:^|[\r\n])' . preg_quote(self::END, '/') . '(?=[\r\n]|$)/', $original);
+        if ($startCount !== $endCount || $startCount > 1 || $startLines !== $startCount || $endLines !== $endCount) {
             throw new \RuntimeException('robots.txt contains invalid/duplicate botWarden markers');
         }
         $rules = [];
@@ -35,7 +37,10 @@ final class RobotsTxtManager
             if ($end === false || $end <= $start) throw new \RuntimeException('Invalid marker ordering');
             return substr($original, 0, $start) . $section . substr($original, $end + strlen(self::END));
         }
-        return rtrim($original, "\r\n") . ($original === '' ? '' : "\n\n") . $section . "\n";
+        $separator = $original === '' || preg_match('/(?:\n\r?\n|\r\r)$/D', $original)
+            ? ''
+            : (preg_match('/[\r\n]$/D', $original) ? "\n" : "\n\n");
+        return $original . $separator . $section . "\n";
     }
 
     /** Returns the previous and new hashes for diagnostics. */
