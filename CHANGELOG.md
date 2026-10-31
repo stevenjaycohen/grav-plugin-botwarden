@@ -8,12 +8,14 @@
 - Moved the dashboard to Grav 2's API and Admin2 extension interfaces.
 
 ### Added
+- MCP tool manifest for the seven management API operations, retaining `api.super` permissions and explicit migration confirmation.
 - Secure Admin2 API for statistics, local blacklist management and block history.
 - Legacy GRVHulk installation discovery and user-authorized migration with backups.
 - Optional Known Agents robots.txt management with marked sections and atomic publication.
 - Regression tests for feed parsing and crawler policies, and GitHub Actions PHP checks.
 
 ### Fixed
+- Migration reports corrupt SQLite input through an exception and rolls back without emitting a PHP warning.
 - Invalid/empty AbuseIPDB and Known Agents responses no longer erase existing security lists.
 
 ## Upstream GRVHulk

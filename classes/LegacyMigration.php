@@ -81,6 +81,7 @@ final class LegacyMigration
             if ($status['database_present']) {
                 $source = new SQLite3($oldDb, SQLITE3_OPEN_READONLY);
                 try {
+                    $source->enableExceptions(true);
                     if ($source->querySingle('PRAGMA integrity_check') !== 'ok') {
                         throw new \RuntimeException('Legacy database integrity check failed');
                     }

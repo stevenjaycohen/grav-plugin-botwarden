@@ -25,10 +25,18 @@ This is an application-layer plugin, **not** a network firewall. `robots.txt` di
 
 No runtime Guzzle installation is needed: botWarden uses PHP cURL. Run Composer only to install development test dependencies.
 
+### MCP tools
+
+The root `mcp.yaml` exposes seven API operations: `botwarden_status`, `botwarden_legacy_preview`, `botwarden_list_blocks`, `botwarden_history`, `botwarden_add_block`, `botwarden_remove_block`, and `botwarden_migrate_legacy`. Every tool requires `api.super`, matching the controller. Block changes and migration are annotated as writes; migration still requires explicit confirmation.
+
+Use the existing Grav MCP Server plugin to discover these tools through `tools/list`; a separate stdio bridge is not required. The API plugin collects manifests from enabled plugins through `/mcp/tools`, filtering them to the caller's permissions. A restricted account will not see botWarden tools. See `TODO.md` for this project's existing localhost installation and remaining verification gates.
+
 ## Developing and testing
 
 Clone into `user/plugins/botwarden`; do not replace the original plugin folder.
 This branch has not yet completed clean-install integration testing.
+
+Local verification on 2026-10-31 passed 81 PHPUnit tests (161 assertions), MCP discovery and authorization, block operations, Grav HTTP interception, and synthetic GRVHulk 1.0.0 migration checks on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5 / MCP Server 1.8.0. Browser interaction, external integrations, PHP 8.3, real-data migration and release packaging remain unverified. See the session evidence in `TODO.md`; this remains a pre-release.
 
 ```bash
 composer install

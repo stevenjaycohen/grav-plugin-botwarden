@@ -86,6 +86,7 @@ final class LegacyMigrationTest extends TestCase
             LegacyMigration::migrate($this->userDir, true);
             $this->fail('Bad database must not migrate');
         } catch (\Throwable $error) {
+            $this->assertStringContainsString('not a database', $error->getMessage());
             $this->assertFileDoesNotExist($this->userDir . '/config/plugins/botwarden.yaml');
             $this->assertFileDoesNotExist($this->userDir . '/data/botwarden/botwarden.sqlite');
         }
