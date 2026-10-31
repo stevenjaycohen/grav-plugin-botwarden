@@ -1,49 +1,32 @@
 # Changelog
 
-# v1.1.0
-## 06/17/2026
+## 1.2.0 — 2026-10-31
 
-1. [](#new)
-    * Block history: every block/unblock is recorded in a new `history` table (IP, action, reason, manual flag, timestamp) and shown in the Admin UI with colour-coded badges and pagination
-    * Blocked IP list in the Admin UI is now fully paginated (all entries) instead of only the last 25
-    * Statistics dashboard shows the history entry count
-    * Configurable history retention via `history_ttl` (default 30 days) and `history_max_rows` (default 50000); pruned nightly by a dedicated scheduler job that runs independently of `auto_clean`
-2. [](#bugfix)
-    * Fixed the GRVHulk shield link not appearing in the Admin sidebar — the admin menu/template listeners were gated on a user-session check that runs before the session is resolved in `onPluginsInitialized`
+### Changed
+- Continued GRVHulk's 1.1 version line as botWarden 1.2.0.
+- Renamed repository, plugin slug, namespaces, class paths and database location.
+- Replaced runtime Guzzle dependency with a PHP cURL transport.
+- Moved the dashboard to Grav 2's API and Admin2 extension interfaces.
 
-# v1.0.0
-## 06/14/2026
+### Added
+- Tagged release publishing through GitHub Actions after unit and clean-install checks pass.
+- Release archive export exclusions and CI checks that install the ZIP through Grav's GPM installer, run migration-dialog tests and fail unit tests on warnings.
+- Robots.txt unit and scheduled HTTP regression tests for owner-rule preservation, file permissions, backups, idempotence and damaged markers.
+- Localhost service integration tests for feed failures, CrowdSec quotas/cache expiry, deferred report limits/retries, scheduler execution and concurrent SQLite WAL reads.
+- Opt-in HTTP authorization regression tests for API-key scope caps, mixed credentials, cookie CSRF checks, session/account revocation and logout.
+- GRVHulk 1.1 schema fixtures and migration regression tests for WAL snapshots, existing destinations, late-failure cleanup and rollback, plus confirmation/cancel/error dialog tests.
+- MCP tool manifest for the seven management API operations, retaining `api.super` permissions and explicit migration confirmation.
+- Secure Admin2 API for statistics, local blacklist management and block history.
+- Legacy GRVHulk installation discovery and user-authorized migration with backups.
+- Optional Known Agents robots.txt management with marked sections and atomic publication.
+- Regression tests for feed parsing and crawler policies, and GitHub Actions PHP checks.
 
-1. [](#new)
-    * Initial release
-    * Local SQLite blacklist (manual entries + auto-population via URI filters)
-    * AbuseIPDB v2 integration:
-        * Bulk blacklist (nightly scheduler, streamed to avoid memory limits)
-        * Live per-request check with configurable confidence threshold and cache
-        * Auto-report of matched IPs to AbuseIPDB
-    * CrowdSec integration (dual-mode):
-        * CTI cloud API (`cti.api.crowdsec.net`) — no self-hosted agent required
-        * LAPI self-hosted agent (`/v1/decisions`)
-        * Configurable score threshold and cache TTL
-        * Quota guard for CTI free-tier rate limits (50 req/day)
-    * Known Agents / Dark Visitors AI crawler blocking:
-        * Blocks AI training crawlers by User-Agent
-        * Daily update via Grav scheduler
-        * Configurable agent type categories
-    * CIDR whitelist (IPv4 and IPv6)
-    * Trusted-proxy model: forwarding headers (CF-Connecting-IP, X-Real-IP, X-Forwarded-For) are honored only behind a configured `trusted_proxies` CIDR list — otherwise the raw `REMOTE_ADDR` is used, preventing client-IP spoofing
-    * URI request filtering with regex patterns (web shells, `.env` probes, credential files, Log4Shell, cloud SSRF, known RCE paths, plus commented context-dependent defaults)
-    * Grav Admin UI: statistics dashboard, IP search / add / remove (AJAX)
-    * Emergency CLI unblock tool (`cli/unblock.php`), framework-independent
-    * SQLite WAL mode for concurrent-access safety
-    * Fail-open design — external API failures never block legitimate users
-    * Grav 2 / PHP 8.1+ compatible
-2. [](#security)
-    * Admin JSON API requires an `admin.users`/`admin.super` permission, not just an authenticated session
-    * AbuseIPDB reports send the request path only (query string stripped) and are queued for the scheduler — sent asynchronously, retried on transient failure, dropped only after repeated attempts — instead of a synchronous call on the request hot path
-    * CrowdSec quota/network fail-open results are no longer cached for the full TTL (only authoritative decisions are cached); CTI lookups are de-duplicated (single-flight) to protect the free-tier quota
-    * URI-filter regex runs against a length-capped subject and fails closed on backtracking/recursion limits (ReDoS hardening)
-    * SQLite `busy_timeout` plus request-path fail-open so background writes (VACUUM, bulk swap) can't 500 the site; bulk-list refresh swaps content transactionally without dropping the live table
-    * Manual blacklist entries are exempt from TTL expiry and auto-clean trimming, and a manual add promotes an existing auto-detected entry
-    * Emergency CLI `--whitelist` writes only to the user config (never the shipped default) and handles both block-scalar and list whitelist formats
-    * Backslash-correct LIKE escaping for AI-crawler user-agent matching
+### Fixed
+- Preserve trailing bytes when appending robots.txt rules and reject markers embedded in other text before publication can replace owner content.
+- Failed feed refreshes and report deliveries now register as failed Grav scheduler runs instead of reporting success; saved lists and report retry handling are preserved.
+- Migration reports corrupt SQLite input through an exception and rolls back without emitting a PHP warning.
+- Invalid/empty AbuseIPDB and Known Agents responses no longer erase existing security lists.
+
+## Upstream GRVHulk
+
+See the repository's Git history for the original GRVHulk 1.0.0 and 1.1.0 development changelog.

@@ -1,0 +1,197 @@
+name: PHP lint and unit tests
+on:
+  push:
+  pull_request:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: sqlite3, curl, mbstring
+          tools: composer:v2
+          coverage: none
+      - name: PHP syntax checks
+        run: find . -path './vendor' -prune -o -name '*.php' -print0 | xargs -0 -r -n1 php -d display_errors=1 -l
+      - name: Validate Composer
+        run: composer validate --no-check-publish
+      - name: Validate Admin2 JavaScript syntax
+        run: node --check admin-next/pages/botwarden.js
+      - name: Run migration dialog tests
+        run: node tests/MigrationPageTest.js
+      - name: Install test dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Run PHPUnit with diagnostics
+        run: php -d display_errors=1 -d error_reporting=-1 vendor/bin/phpunit --exclude-group integration --do-not-cache-result --fail-on-warning --display-warnings --testdox
+
+  grav-smoke:
+    name: Grav 2 clean-install smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: sqlite3, curl, mbstring, gd, zip, intl
+          tools: composer:v2
+          coverage: none
+      - name: Download latest Grav 2 with Admin2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/grav-smoke"
+          curl -fL --retry 2 --connect-timeout 15 --max-time 180 \
+            -o "$RUNNER_TEMP/grav-admin.zip" \
+            https://getgrav.org/download/core/grav-admin/latest
+          unzip -q "$RUNNER_TEMP/grav-admin.zip" -d "$RUNNER_TEMP/grav-smoke"
+          entry=$(find "$RUNNER_TEMP/grav-smoke" -type f -path '*/bin/grav' -print -quit)
+          test -n "$entry" || { echo "Could not locate extracted Grav CLI"; exit 1; }
+          grav_root=$(dirname "$(dirname "$entry")")
+          echo "GRAV_DIR=$grav_root" >> "$GITHUB_ENV"
+          test -f "$grav_root/vendor/autoload.php" || { echo "Grav vendor dependencies missing"; exit 1; }
+          test -d "$grav_root/user/plugins/api" || { echo "Grav API plugin missing"; exit 1; }
+          test -d "$grav_root/user/plugins/admin2" || { echo "Admin2 plugin missing"; exit 1; }
+      - name: Build release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=zip --prefix=grav-plugin-botwarden/ --output="$RUNNER_TEMP/botwarden.zip" HEAD
+          if unzip -Z1 "$RUNNER_TEMP/botwarden.zip" | grep -E '/(vendor|tests|\.github)/|/(TODO\.md|phpunit\.xml)$'; then
+            echo "Release ZIP contains development files"
+            exit 1
+          fi
+      - name: Install release ZIP through GPM and inspect scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GRAV_DIR"
+          php -d display_errors=1 -d error_reporting=-1 -r '
+            define("GRAV_CLI", true);
+            define("GRAV_REQUEST_TIME", microtime(true));
+            $loader = require "vendor/autoload.php";
+            $grav = Grav\Common\Grav::instance(["loader" => $loader]);
+            $grav->setup()->initializeCli();
+            if (!Grav\Common\GPM\Installer::install(getenv("RUNNER_TEMP") . "/botwarden.zip", GRAV_ROOT, ["install_path" => "user/plugins/botwarden", "overwrite" => false])) {
+              fwrite(STDERR, "Release ZIP installation failed: " . Grav\Common\GPM\Installer::lastErrorCode() . "\n");
+              exit(1);
+            }
+            if (is_dir("user/plugins/botwarden/vendor")) {
+              throw new RuntimeException("Release ZIP unexpectedly includes development dependencies");
+            }
+          '
+          php -d display_errors=1 -d error_reporting=-1 bin/grav cache
+          php -d display_errors=1 -d error_reporting=-1 bin/grav scheduler -j > "$RUNNER_TEMP/jobs.txt" 2>&1 || { cat "$RUNNER_TEMP/jobs.txt"; exit 1; }
+          cat "$RUNNER_TEMP/jobs.txt"
+          grep -q botwarden-prune-history "$RUNNER_TEMP/jobs.txt" || { echo "botWarden scheduler job was not registered"; exit 1; }
+          echo "Grav startup and botWarden scheduler registration verified"
+
+      - name: Exercise Grav HTTP bootstrap and API routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GRAV_DIR"
+          php -S 127.0.0.1:18771 -t "$GRAV_DIR" "$GRAV_DIR/system/router.php" > "$RUNNER_TEMP/grav-http.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 25); do
+            if curl -sS --max-time 3 -o "$RUNNER_TEMP/home.html" http://127.0.0.1:18771/; then break; fi
+            sleep 1
+          done
+          home_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/home.html" -w '%{http_code}' http://127.0.0.1:18771/)
+          ping_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/ping.json" -w '%{http_code}' http://127.0.0.1:18771/api/v1/ping)
+          private_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/protected.json" -w '%{http_code}' http://127.0.0.1:18771/api/v1/botwarden/status)
+          echo "Grav home: $home_status; API ping: $ping_status; botWarden protected API (anonymous): $private_status"
+          if [[ ( "$home_status" != "200" && "$home_status" != "302" ) || "$ping_status" != "200" || ( "$private_status" != "401" && "$private_status" != "403" ) ]]; then
+            echo "Unexpected HTTP statuses; server log:"
+            tail -n 150 "$RUNNER_TEMP/grav-http.log"
+            echo "Ping response:"; cat "$RUNNER_TEMP/ping.json"
+            echo "Protected response:"; cat "$RUNNER_TEMP/protected.json"
+            exit 1
+          fi
+
+  release:
+    name: Publish tagged release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [tests, grav-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish the verified release ZIP
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor HEAD origin/main
+          node <<'NODE'
+          const {readFileSync} = require('node:fs');
+          const {execFileSync} = require('node:child_process');
+          const {join} = require('node:path');
+          const {createHash} = require('node:crypto');
+
+          async function publish() {
+            const version = readFileSync('blueprints.yaml', 'utf8').match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1];
+            if (!version || process.env.GITHUB_REF_NAME !== version) throw new Error('Release tag must match the manifest version');
+            const name = `botwarden-${version}.zip`;
+            const path = join(process.env.RUNNER_TEMP, name);
+            execFileSync('git', ['archive', '--format=zip', '--prefix=grav-plugin-botwarden/', `--output=${path}`, 'HEAD']);
+            const entries = execFileSync('unzip', ['-Z1', path], {encoding: 'utf8'}).trim().split('\n');
+            if (entries.some(entry => /\/(vendor|tests|\.github)\/|\/(TODO\.md|phpunit\.xml)$/.test(entry))) throw new Error('Development files in release ZIP');
+            for (const required of ['LICENSE', 'blueprints.yaml', 'composer.json', 'mcp.yaml', 'botwarden.php']) {
+              if (!entries.includes(`grav-plugin-botwarden/${required}`)) throw new Error(`Missing release file: ${required}`);
+            }
+            const bytes = readFileSync(path);
+            const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+            const api = `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}`;
+            const headers = {Authorization: `Bearer ${process.env.GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'botwarden-release'};
+            async function json(response, action) {
+              if (!response.ok) throw new Error(`${action}: HTTP ${response.status}`);
+              return response.json();
+            }
+            const lookup = await fetch(`${api}/releases/tags/${encodeURIComponent(version)}`, {headers});
+            let release;
+            if (lookup.status === 404) {
+              release = await json(await fetch(`${api}/releases`, {
+                method: 'POST', headers: {...headers, 'Content-Type': 'application/json'},
+                body: JSON.stringify({tag_name: version, name: `botWarden ${version}`, body: readFileSync('CHANGELOG.md', 'utf8'), draft: true, prerelease: false})
+              }), 'Create draft release');
+            } else {
+              release = await json(lookup, 'Read existing release');
+              if (release.tag_name !== version || release.name !== `botWarden ${version}` || release.prerelease) throw new Error('Existing release differs; refusing to overwrite it');
+            }
+            let asset = release.assets.find(item => item.name === name);
+            if (asset) {
+              const downloaded = await fetch(asset.url, {headers: {...headers, Accept: 'application/octet-stream'}});
+              if (!downloaded.ok) throw new Error(`Read existing ZIP: HTTP ${downloaded.status}`);
+              const actual = `sha256:${createHash('sha256').update(Buffer.from(await downloaded.arrayBuffer())).digest('hex')}`;
+              if (actual !== digest) throw new Error('Existing release ZIP differs; refusing to replace it');
+            } else {
+              const upload = new URL(release.upload_url.replace(/\{.*$/, ''));
+              if (upload.origin !== 'https://uploads.github.com') throw new Error('Unexpected release upload host');
+              upload.searchParams.set('name', name);
+              asset = await json(await fetch(upload, {method: 'POST', headers: {...headers, 'Content-Type': 'application/zip'}, body: bytes}), 'Upload release ZIP');
+              if (asset.size !== bytes.length || (asset.digest && asset.digest !== digest)) throw new Error('Uploaded release ZIP verification failed');
+            }
+            if (release.draft) {
+              release = await json(await fetch(`${api}/releases/${release.id}`, {
+                method: 'PATCH', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify({draft: false})
+              }), 'Publish release');
+            }
+            console.log(`Published ${release.html_url}`);
+            console.log(`${name}: ${digest}`);
+          }
+          publish().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE

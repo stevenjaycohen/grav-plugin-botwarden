@@ -1,232 +1,110 @@
-# GRVHulk — Grav 2 IP Security Plugin
+# botWarden — security and crawler policy management for Grav 2
 
-Advanced IP security plugin for [Grav 2](https://getgrav.org/) CMS.  
-Blocks malicious IPs using local blacklists, [AbuseIPDB](https://www.abuseipdb.com/), [CrowdSec](https://www.crowdsec.net/), and blocks AI training crawlers via [Known Agents](https://www.knownagents.com/).
+**Version 1.2.0** — maintained continuation of GRVHulk 1.1 for Grav 2.
+
+botWarden is a maintained fork of [GRVHulk by horiken1216](https://github.com/horiken1216/grav-plugin-grvhulk). Its MIT license and copyright notice remain in [LICENSE](LICENSE). GRVHulk's original architecture itself credits [Ari Cooper-Davis's grav-plugin-ip-blacklist](https://github.com/aricooperdavis/grav-plugin-ip-blacklist).
+
+The fork continues GRVHulk's 1.1 version line as botWarden 1.2.0.
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **Local blacklist** | SQLite-backed list, managed via Admin UI or auto-populated by URI filters |
-| **AbuseIPDB bulk** | Nightly download of AbuseIPDB's IP blacklist (free API key required) |
-| **AbuseIPDB live** | Per-request confidence-score check with local cache |
-| **CrowdSec CTI** | Cloud-based threat intelligence check — no self-hosted agent needed |
-| **CrowdSec LAPI** | Self-hosted CrowdSec agent integration (real-time decisions) |
-| **AI crawler blocking** | Blocks known AI training crawlers by User-Agent (via Known Agents API) |
-| **CIDR whitelist** | IPv4 and IPv6 CIDR ranges that are never blocked |
-| **URI filtering** | Regex patterns to auto-blacklist probing IPs (.env, webshells, Log4Shell…) |
-| **Admin UI** | Dashboard with stats, IP search/add/remove |
-| **Scheduler** | Automated nightly list updates and cleanup |
+- Local SQLite IP blocking, block history, manual blocks, URI filters, CIDR whitelist and trusted-proxy handling
+- AbuseIPDB bulk blacklist and deferred IP reporting
+- CrowdSec CTI/LAPI checks with quotas and caching
+- Known Agents crawler User-Agent blocking
+- **Opt-in** `robots.txt` rules with markers `# botWarden:START` / `# botWarden:END`
+- Grav 2 API and Admin2 management page (sidebar, local blocks, history, statistics, legacy import)
+- GRVHulk migration: detection, preview, explicit confirmation, backups and data import
+
+This is an application-layer plugin, **not** a network firewall. `robots.txt` directives are voluntary requests to compliant crawlers and do not enforce access control.
 
 ## Requirements
 
-- Grav 2.0+
-- PHP 8.1+
-- PHP extensions: `sqlite3`, `curl`
-- (Optional) [Grav Admin Plugin](https://github.com/getgrav/grav-plugin-admin) for the UI
+- Grav CMS 2 with Grav API and Admin2
+- PHP 8.3 or 8.4
+- PHP extensions: curl, sqlite3
+- The Grav scheduler must be active for nightly refreshes
 
-## Installation
+No runtime Guzzle installation is needed: botWarden uses PHP cURL. Run Composer only to install development test dependencies.
 
-No `composer install` is needed — GRVHulk relies on `guzzlehttp/guzzle`, which Grav 2 ships as part of its own dependencies.
+### MCP tools
 
-**Option A — GPM (once listed in the Grav Plugin Repository)**
+The root `mcp.yaml` exposes seven API operations: `botwarden_status`, `botwarden_legacy_preview`, `botwarden_list_blocks`, `botwarden_history`, `botwarden_add_block`, `botwarden_remove_block`, and `botwarden_migrate_legacy`. Every tool requires `api.super`, matching the controller. Block changes and migration are annotated as writes; migration still requires explicit confirmation.
 
-> GRVHulk is being prepared for the Grav Plugin Repository. Once accepted, install with:
+Use the existing Grav MCP Server plugin to discover these tools through `tools/list`; a separate stdio bridge is not required. The API plugin collects manifests from enabled plugins through `/mcp/tools`, filtering them to the caller's permissions. A restricted account will not see botWarden tools. See `TODO.md` for this project's existing localhost installation and remaining verification gates.
 
-```bash
-bin/gpm install grvhulk
-```
+## Developing and testing
 
-**Option B — git clone (recommended until GPM listing, easy to update)**
+Clone into `user/plugins/botwarden`; do not replace the original plugin folder.
+Clean release ZIP installation is verified locally on PHP 8.4.27 and in GitHub CI.
 
-```bash
-cd /path/to/grav/user/plugins
-git clone https://github.com/horiken1216/grav-plugin-grvhulk.git grvhulk
-```
-
-To update later: `git -C grvhulk pull`
-
-**Option C — ZIP download**
-
-1. Download the latest ZIP from the [Releases page](https://github.com/horiken1216/grav-plugin-grvhulk/releases)
-2. Extract it into `user/plugins/grvhulk/`
-
-After installing either way, enable the plugin:
-
-- **Admin UI**: Plugins → GRVHulk → toggle on
-- **Or manually**: set `enabled: true` in `user/config/plugins/grvhulk.yaml`
-
-> **Development / testing only:** run `composer install` inside the `grvhulk/` directory to install PHPUnit and run the test suite (`composer test`).
-
-## Configuration
-
-Copy `grvhulk.yaml` to `user/config/plugins/grvhulk.yaml` and edit as needed, or configure entirely through the Admin UI.
-
-### Minimum setup — local blacklist only
-
-```yaml
-enabled: true
-enable_blacklisting: true
-sources:
-  local: true
-```
-
-### With AbuseIPDB (recommended)
-
-```yaml
-sources:
-  local: true
-  abuseipdb_bulk: true   # requires nightly scheduler job
-
-abuseipdb:
-  api_key: 'YOUR_KEY'
-
-auto_cache: true   # enable nightly AbuseIPDB refresh
-```
-
-Run the scheduler to initialise the bulk list:
-```bash
-bin/grav scheduler:run
-```
-
-### With CrowdSec CTI (cloud)
-
-```yaml
-sources:
-  crowdsec: true
-
-crowdsec:
-  mode: cti
-  cti_api_key: 'YOUR_CTI_KEY'
-  cti_score_threshold: 3
-  cti_cache_ttl: 21600   # 6 hours — stays within free-tier 50 req/day
-```
-
-### With CrowdSec LAPI (self-hosted)
-
-```yaml
-crowdsec:
-  mode: lapi
-  lapi_url: 'http://localhost:8080'
-  lapi_api_key: 'YOUR_BOUNCER_KEY'   # from: cscli bouncers add grvhulk-bouncer
-```
-
-### AI crawler blocking (Known Agents)
-
-```yaml
-sources:
-  dark_visitors: true
-
-dark_visitors:
-  api_key: 'YOUR_KNOWN_AGENTS_KEY'
-  agent_types:
-    - 'AI Assistant'
-    - 'AI Data Scraper'
-    - 'AI Search Crawler'
-    - 'Undocumented AI Agent'
-  cache_ttl: 86400   # refresh once a day
-```
-
-### URI filtering
-
-```yaml
-enable_filtering: true
-filters: |
-  wso\.php
-  \.env$
-  /\.git/config
-  \$\{jndi:
-```
-
-## Scheduler
-
-Enable the Grav scheduler (cron or system service) for automated list updates and cleanup.
-
-Registered jobs:
-
-| Job | Schedule | Description |
-|-----|----------|-------------|
-| `grvhulk-auto-clean` | `35 2 * * *` | Trim local blacklist + prune cache + VACUUM |
-| `grvhulk-abuseipdb-cache` | `45 2 * * *` | Refresh AbuseIPDB bulk blacklist |
-| `grvhulk-dark-visitors` | `0 3 * * *` | Refresh Known Agents UA list |
-| `grvhulk-flush-reports` | `*/10 * * * *` | Send queued AbuseIPDB reports (when reporting is enabled) |
-
-Manual trigger:
-```bash
-bin/grav scheduler:run
-```
-
-## Trusted proxies (important behind a CDN / reverse proxy)
-
-By default GRVHulk identifies clients by `REMOTE_ADDR` only. Forwarding headers
-(`CF-Connecting-IP`, `X-Real-IP`, `X-Forwarded-For`) are **ignored unless the
-direct connection comes from a configured trusted proxy** — this prevents
-attackers from spoofing their IP to evade blocks or to get a third party blocked.
-
-If your site sits behind Cloudflare, nginx, or a load balancer, list those
-proxy IPs/CIDRs so the real client IP is detected:
-
-```yaml
-trusted_proxies: |
-  173.245.48.0/20
-  103.21.244.0/22
-  # ...your CDN/proxy ranges
-```
-
-Leave it empty for a directly-exposed origin.
-
-## Security Design
-
-- **Spoof-resistant client IP**: forwarding headers are trusted only behind `trusted_proxies` (see above).
-- **Fail-open**: if any external API (AbuseIPDB, CrowdSec, Known Agents) is unavailable, or an internal DB check errors, the request is **allowed through** — legitimate visitors are never blocked due to infrastructure failures.
-- **Whitelist priority**: whitelisted IPs are always allowed, before any source is checked.
-- **SQLite WAL mode + busy timeout**: safe for concurrent PHP-FPM workers and scheduler processes; background maintenance never 500s live requests.
-- **CrowdSec CTI quota guard**: if the free-tier daily limit (50 req/day) is exceeded, CTI checks are paused until the next UTC midnight, and transient/quota fail-open results are not cached long-term.
-- **Deferred reporting**: AbuseIPDB reports are queued and sent by the scheduler, never synchronously on the request path.
-- **Manual blocks persist**: IPs you add by hand are exempt from TTL expiry and auto-clean trimming.
-
-## Emergency CLI Unblock
-
-If you accidentally block your own IP and can no longer reach the admin UI,
-use the bundled CLI script over SSH:
+Local verification on 2026-10-31 passed 215 PHPUnit tests (761 assertions), including 102 unit/regression tests, 70 HTTP authorization tests and 43 synthetic service integration tests, on PHP 8.4.27 / Grav 2.2.17 / API 1.1.5 / Admin2 2.2.5. Three JavaScript migration-dialog tests and earlier MCP discovery, block operations, Grav HTTP interception and synthetic GRVHulk 1.0.0/1.1.0 migration checks also passed. The MCP checks used MCP Server 1.8.0. The owner confirmed the dashboard/settings browser checklist and separately signed off the local GRVHulk 1.1 migration; original, imported and backup rows matched, with GRVHulk disabled and botWarden enabled afterward. GitHub CI passed its PHP 8.3/8.4 unit jobs and clean ZIP/GPM/HTTP smoke test. Live provider accounts, real site data and deployed proxy/web-server/cron behavior were not exercised by these local tests.
 
 ```bash
-# Run from your Grav root directory
-php user/plugins/grvhulk/cli/unblock.php 203.0.113.5
-
-# List the last 25 blocked IPs
-php user/plugins/grvhulk/cli/unblock.php --list
-
-# Remove IP and also add it to the whitelist (prevents re-blocking)
-php user/plugins/grvhulk/cli/unblock.php 203.0.113.5 --whitelist
-
-# Specify the DB path explicitly (if Grav is not in a standard location)
-php user/plugins/grvhulk/cli/unblock.php 203.0.113.5 --db=/path/to/grvhulk.sqlite
+composer install
+composer test
+node tests/MigrationPageTest.js
 ```
 
-The script requires no Grav framework — it connects to the SQLite database directly.
+The `integration` PHPUnit group additionally tests real HTTP authorization against the disposable repository-local Grav fixture. It is skipped unless `BOTWARDEN_TEST_URL=http://127.0.0.1:8777` is set. Run `BOTWARDEN_TEST_URL=http://127.0.0.1:8777 php vendor/bin/phpunit tests/ApiAuthorizationTest.php --do-not-cache-result --fail-on-warning` after preparing that fixture. Temporary accounts, API keys, native PHP sessions and security data are created and removed by the tests. On 2026-10-31, all 70 integration tests (245 assertions) passed. Session writes follow the installed API's documented hostname-based Origin/Referer policy, including acceptance of another port on the same host; JSON/custom-header fallbacks apply when those headers are absent.
 
-## Admin UI
+`tests/ServiceIntegrationTest.php` uses the same disposable Grav host plus a synthetic provider server. From this repository, start `php -S 127.0.0.1:8778 -t vendor/.botwarden-migration/tmp tests/fixtures/ServiceFixture.php`, then run `BOTWARDEN_TEST_URL=http://127.0.0.1:8777 php vendor/bin/phpunit tests/ServiceIntegrationTest.php --do-not-cache-result --fail-on-warning`. Its CLI helper redirects fixed provider URLs to localhost before the real cURL transport runs; web requests use a configured loopback LAPI stub. No live keys or external reports are used. Tests restore the fixture's plugin configuration and remove their synthetic database and request log. Feed/report failures must appear as failures in Grav's scheduler state; existing lists, last-success times and the bounded report retry policy are retained.
 
-Navigate to **Admin → GRVHulk** to:
+### Configuration
 
-- View statistics (blacklist sizes, DB size, last update times)
-- Search, add, or remove IPs from the local blacklist
-- Access the settings page
+Default configuration is in `botwarden.yaml`. Grav stores overrides in `user/config/plugins/botwarden.yaml`.
+The new SQLite database is `user/data/botwarden/botwarden.sqlite`, independent of GRVHulk.
 
-## Acknowledgements
+Known Agents blocking is configured through `sources.dark_visitors` (preserving the legacy key).
+Publishing `robots.txt` rules is a separate opt-in setting:
 
-GRVHulk is inspired by and built upon the design of
-**[grav-plugin-ip-blacklist](https://github.com/aricooperdavis/grav-plugin-ip-blacklist)**
-by **Ari Cooper-Davis** (MIT License).
+```yaml
+robots_txt:
+  enabled: true
+```
 
-That plugin provided the foundational approach for Grav CMS IP blacklisting,
-including the event hook architecture, SQLite storage design, AbuseIPDB integration,
-and URI filtering. GRVHulk extends this design for Grav 2 and adds
-CrowdSec and AI crawler blocking capabilities.
+This uses the Known Agents API key in `dark_visitors.api_key`. The scheduled update writes botWarden's marked section in the Grav root `robots.txt`, appending it when absent and preserving all existing bytes outside it, including separate Known Hosts rules. Each marker must occupy its own complete line; missing, duplicate, reversed or embedded markers cause publication to fail without changing the file. Changed files receive a timestamped backup in `user/data/botwarden/backups`; unchanged runs do not rewrite the file or create another backup. Existing file permissions are retained, backups use mode `0600`, and newly created public files use `0644`. Publishing rules and enabling User-Agent enforcement remain separate settings.
 
-Thank you, Ari, for the original work. 🙏
+### Migrating GRVHulk
 
-## License
+The plugin detects old installation artifacts:
 
-MIT — see [LICENSE](LICENSE).
+- `user/plugins/grvhulk/`
+- `user/config/plugins/grvhulk.yaml`
+- `user/data/grvhulk/grvhulk.sqlite`
+
+Go to **Admin2 → botWarden → GRVHulk migration**, review the detection result, and confirm the import. Or use the CLI (preview by default):
+
+```bash
+php user/plugins/botwarden/cli/migrate.php
+php user/plugins/botwarden/cli/migrate.php --confirm
+```
+
+The migration copies compatible YAML settings **with botWarden disabled**, and uses SQLite's online backup API to snapshot the original database (safe for WAL). Backups are stored under `user/data/botwarden/backups`. It does not delete, disable or overwrite the older GRVHulk installation and will not overwrite existing botWarden settings or data.
+
+**After verifying the imported data, disable GRVHulk before enabling botWarden.** A partially completed migration rolls back newly created destination files; backups are retained for review. Review configuration keys and scheduler settings before production activation.
+
+### Emergency unblock
+
+```bash
+php user/plugins/botwarden/cli/unblock.php --list
+php user/plugins/botwarden/cli/unblock.php 203.0.113.7 --whitelist
+```
+
+## Release packaging
+
+The repository's `.gitattributes` excludes tests, CI files and local development notes from Git archives. From a committed checkout with the ignored `vendor/` directory available, create a package without overwriting an existing one:
+
+```bash
+test ! -e vendor/botwarden-1.2.0.zip && git archive --format=zip --prefix=grav-plugin-botwarden/ --output=vendor/botwarden-1.2.0.zip HEAD
+```
+
+The tested package contained 22 files, including its license, metadata and MCP manifest, with no plugin `vendor/` directory. Grav's GPM installer installed it into a clean disposable host. On PHP 8.4.27, scheduler registration/execution, public HTTP, API authorization, block/unblock operations, tool discovery and both CLI utilities passed. CI builds and installs this ZIP for its Grav smoke test and runs the migration-dialog JavaScript tests. A semantic-version tag matching `blueprints.yaml` publishes the ZIP as a GitHub release after the unit and clean-install jobs pass. The tagged commit must be on `main`; existing release assets with different contents are not replaced.
+
+## Release and GPM status
+
+botWarden 1.2.0 continues the abandoned GRVHulk 1.1 plugin. Release ZIPs are published on the repository's [GitHub releases page](https://github.com/stevenjaycohen/grav-plugin-botwarden/releases). GPM catalog registration is separate from publishing a GitHub release. Local sign-off used PHP 8.4; declared compatibility requirements were retained. Confirm provider credentials, migration backups and deployment-specific settings for the installation you maintain.
+
+## Original authors and license
+
+Maintained by Steven Jay Cohen. Derived from GRVHulk by horiken1216; the original copyright notice and MIT license remain in `LICENSE`. Full prior changes remain in Git history.

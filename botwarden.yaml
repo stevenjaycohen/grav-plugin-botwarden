@@ -190,3 +190,8 @@ filters: |
   /package\.json$
   /yarn\.lock$
   /package-lock\.json$
+
+# Optional publication of Known Agents crawler policy to robots.txt.
+# Distinct from active HTTP request blocking; disabled until explicitly enabled.
+robots_txt:
+  enabled: false

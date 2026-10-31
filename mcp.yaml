@@ -1,0 +1,102 @@
+version: 1
+prefix: botwarden
+tools:
+  - name: status
+    title: botWarden status
+    description: Read counts of local blocks, history events, AbuseIPDB entries and Known Agents. Use before managing blocks or checking a migration.
+    method: GET
+    path: /botwarden/status
+    permission: api.super
+    annotations:
+      readOnly: true
+
+  - name: legacy_preview
+    title: Preview GRVHulk migration
+    description: Inspect legacy GRVHulk artifacts and destination availability without importing data. Review this result before requesting explicit migration confirmation.
+    method: GET
+    path: /botwarden/legacy
+    permission: api.super
+    annotations:
+      readOnly: true
+
+  - name: list_blocks
+    title: List local IP blocks
+    description: Read a page of local blacklist entries with the total count, limit and offset. Use this to inspect existing blocks before adding or removing one.
+    method: GET
+    path: /botwarden/blocks
+    permission: api.super
+    annotations:
+      readOnly: true
+    input:
+      type: object
+      properties:
+        limit: { type: integer, minimum: 1, maximum: 200, default: 50, description: Maximum number of entries to return. }
+        offset: { type: integer, minimum: 0, default: 0, description: Number of entries to skip. }
+      additionalProperties: false
+
+  - name: history
+    title: Read block history
+    description: Read a page of block and unblock events with the total count, limit and offset. Use it to check the audit history after an authorized operation.
+    method: GET
+    path: /botwarden/history
+    permission: api.super
+    annotations:
+      readOnly: true
+    input:
+      type: object
+      properties:
+        limit: { type: integer, minimum: 1, maximum: 200, default: 50, description: Maximum number of events to return. }
+        offset: { type: integer, minimum: 0, default: 0, description: Number of events to skip. }
+      additionalProperties: false
+
+  - name: add_block
+    title: Block an IP address
+    description: Add or promote a permanent manual local IP block and record a history event. Changes access control; use only for an explicitly authorized address.
+    method: POST
+    path: /botwarden/blocks
+    permission: api.super
+    annotations:
+      readOnly: false
+      destructive: true
+      idempotent: false
+    input:
+      type: object
+      required: [ip]
+      properties:
+        ip: { type: string, minLength: 1, description: Valid IPv4 or IPv6 address to block. }
+        reason: { type: string, maxLength: 200, default: Manual, description: Reason recorded for the manual block. }
+      additionalProperties: false
+
+  - name: remove_block
+    title: Unblock an IP address
+    description: Remove a local IP block and record an unblock history event. Changes access control and does not override other enabled threat sources.
+    method: POST
+    path: /botwarden/unblock
+    permission: api.super
+    annotations:
+      readOnly: false
+      destructive: true
+      idempotent: false
+    input:
+      type: object
+      required: [ip]
+      properties:
+        ip: { type: string, minLength: 1, description: Valid IPv4 or IPv6 address to unblock. }
+      additionalProperties: false
+
+  - name: migrate_legacy
+    title: Import GRVHulk settings and data
+    description: Back up and import eligible GRVHulk settings and SQLite data into an unoccupied botWarden destination. Requires explicit user confirmation after legacy preview; leaves botWarden disabled and preserves GRVHulk without disabling it.
+    method: POST
+    path: /botwarden/migrate
+    permission: api.super
+    annotations:
+      readOnly: false
+      destructive: true
+      idempotent: false
+    input:
+      type: object
+      required: [confirm]
+      properties:
+        confirm: { type: boolean, description: Must be true after explicit user confirmation; false is rejected. }
+      additionalProperties: false
