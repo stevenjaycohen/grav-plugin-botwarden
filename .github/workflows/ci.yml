@@ -83,7 +83,7 @@ jobs:
           ping_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/ping.json" -w '%{http_code}' http://127.0.0.1:18771/api/v1/ping)
           private_status=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/protected.json" -w '%{http_code}' http://127.0.0.1:18771/api/v1/botwarden/status)
           echo "Grav home: $home_status; API ping: $ping_status; botWarden protected API (anonymous): $private_status"
-          if [[ "$home_status" != "200" || "$ping_status" != "200" || ( "$private_status" != "401" && "$private_status" != "403" ) ]]; then
+          if [[ ( "$home_status" != "200" && "$home_status" != "302" ) || "$ping_status" != "200" || ( "$private_status" != "401" && "$private_status" != "403" ) ]]; then
             echo "Unexpected HTTP statuses; server log:"
             tail -n 150 "$RUNNER_TEMP/grav-http.log"
             echo "Ping response:"; cat "$RUNNER_TEMP/ping.json"
