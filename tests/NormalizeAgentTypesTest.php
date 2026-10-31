@@ -1,7 +1,7 @@
 <?php
-namespace Grav\Plugin\Grvhulk\Tests;
+namespace Grav\Plugin\Botwarden\Tests;
 
-use Grav\Plugin\GrvhulkPlugin;
+use Grav\Plugin\BotwardenPlugin;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -16,7 +16,7 @@ class NormalizeAgentTypesTest extends TestCase
 
     private function normalize(mixed $input): array
     {
-        $ref = new ReflectionClass(GrvhulkPlugin::class);
+        $ref = new ReflectionClass(BotwardenPlugin::class);
         $method = $ref->getMethod('normalizeAgentTypes');
         $method->setAccessible(true);
         return $method->invoke(null, $input);

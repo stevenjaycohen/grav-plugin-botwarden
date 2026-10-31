@@ -1,12 +1,16 @@
 {
-    "name": "horiken1216/grav-plugin-grvhulk",
-    "description": "Advanced IP security plugin for Grav 2 CMS with AbuseIPDB, CrowdSec CTI/LAPI, and AI crawler blocking via Known Agents",
+    "name": "stevenjaycohen/grav-plugin-botwarden",
+    "description": "Application-layer IP security and crawler policy management for Grav CMS",
     "type": "grav-plugin",
     "license": "MIT",
     "authors": [
         {
             "name": "horiken1216",
-            "role": "Developer"
+            "role": "Original developer"
+        },
+        {
+            "name": "Steven Jay Cohen",
+            "role": "Maintainer"
         }
     ],
     "require": {
@@ -18,7 +22,7 @@
     },
     "autoload": {
         "psr-4": {
-            "Grav\\Plugin\\Grvhulk\\": "classes/"
+            "Grav\\Plugin\\Botwarden\\": "classes/"
         }
     },
     "scripts": {

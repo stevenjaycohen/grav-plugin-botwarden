@@ -1,5 +1,5 @@
 <?php
-namespace Grav\Plugin\Grvhulk;
+namespace Grav\Plugin\Botwarden;
 
 /**
  * Client IP detection and whitelist evaluation.

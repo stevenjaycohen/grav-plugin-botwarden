@@ -7,16 +7,16 @@ use Grav\Common\Plugin;
 use Grav\Common\Filesystem\Folder;
 use Grav\Common\Utils;
 use Grav\Framework\Psr7\Response;
-use Grav\Plugin\Grvhulk\AbuseIpDbClient;
-use Grav\Plugin\Grvhulk\CrowdSecClient;
-use Grav\Plugin\Grvhulk\DarkVisitorsClient;
-use Grav\Plugin\Grvhulk\HulkDatabase;
-use Grav\Plugin\Grvhulk\IpDetector;
+use Grav\Plugin\Botwarden\AbuseIpDbClient;
+use Grav\Plugin\Botwarden\CrowdSecClient;
+use Grav\Plugin\Botwarden\DarkVisitorsClient;
+use Grav\Plugin\Botwarden\BotwardenDatabase;
+use Grav\Plugin\Botwarden\IpDetector;
 use RocketTheme\Toolbox\Event\Event;
 use SQLite3;
 
 /**
- * Class GrvhulkPlugin
+ * Class BotwardenPlugin
  *
  * Advanced IP security plugin for Grav 2.
  * Features: local blacklist, AbuseIPDB (bulk + live), CrowdSec (CTI/LAPI),
@@ -24,7 +24,7 @@ use SQLite3;
  *
  * Based on the design of grav-plugin-ip-blacklist by Ari Cooper-Davis.
  */
-class GrvhulkPlugin extends Plugin
+class BotwardenPlugin extends Plugin
 {
     private static ?SQLite3 $dbInstance = null;
 
@@ -44,7 +44,7 @@ class GrvhulkPlugin extends Plugin
         // No local vendor — Grav 2 ships guzzlehttp/guzzle, so we only need
         // to register our own namespace with Composer's already-loaded ClassLoader.
         $loader = new ClassLoader();
-        $loader->addPsr4('Grav\\Plugin\\Grvhulk\\', [__DIR__ . '/classes/']);
+        $loader->addPsr4('Grav\\Plugin\\Botwarden\\', [__DIR__ . '/classes/']);
         $loader->register();
         return $loader;
     }
@@ -89,7 +89,7 @@ class GrvhulkPlugin extends Plugin
             $path = $_SERVER['REQUEST_URI'] ?? '';
         }
 
-        if ($this->isAdmin() && $this->grav['user']->authenticated && $path === '/admin/grvhulk/data') {
+        if ($this->isAdmin() && $this->grav['user']->authenticated && $path === '/admin/botwarden/data') {
             $this->handleAdminApi($request);
             return;
         }
@@ -112,7 +112,7 @@ class GrvhulkPlugin extends Plugin
         $whitelist = $this->parseLineList($config['whitelist'] ?? '');
         if (!empty($whitelist) && IpDetector::isWhitelisted($ip, $whitelist)) {
             if ($config['logging'] ?? false) {
-                $this->grav['log']->debug("[Hulk] Whitelisted: {$ip}");
+                $this->grav['log']->debug("[Warden] Whitelisted: {$ip}");
             }
             return;
         }
@@ -127,9 +127,9 @@ class GrvhulkPlugin extends Plugin
                 // --- Known Agents: User-Agent check ---
                 if (!empty($config['sources']['dark_visitors'])) {
                     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
-                    if ($ua !== '' && HulkDatabase::isDarkVisitorsAgentBlocked($db, $ua)) {
+                    if ($ua !== '' && BotwardenDatabase::isDarkVisitorsAgentBlocked($db, $ua)) {
                         if ($config['logging'] ?? false) {
-                            $this->grav['log']->debug("[Hulk] Blocked AI crawler UA: {$ua} ({$ip})");
+                            $this->grav['log']->debug("[Warden] Blocked AI crawler UA: {$ua} ({$ip})");
                         }
                         $this->rejectRequest($request);
                         return;
@@ -139,9 +139,9 @@ class GrvhulkPlugin extends Plugin
                 // --- Local blacklist ---
                 if (!empty($config['sources']['local'])) {
                     $localTtl = (int)($config['local_ttl'] ?? 86400);
-                    if (HulkDatabase::isIpInLocal($db, $ip, $localTtl)) {
+                    if (BotwardenDatabase::isIpInLocal($db, $ip, $localTtl)) {
                         if ($config['logging'] ?? false) {
-                            $this->grav['log']->debug("[Hulk] Blocked by local blacklist: {$ip}");
+                            $this->grav['log']->debug("[Warden] Blocked by local blacklist: {$ip}");
                         }
                         $this->rejectRequest($request);
                         return;
@@ -150,9 +150,9 @@ class GrvhulkPlugin extends Plugin
 
                 // --- AbuseIPDB bulk blacklist ---
                 if (!empty($config['sources']['abuseipdb_bulk'])) {
-                    if (HulkDatabase::isIpInAbuseipdbBulk($db, $ip)) {
+                    if (BotwardenDatabase::isIpInAbuseipdbBulk($db, $ip)) {
                         if ($config['logging'] ?? false) {
-                            $this->grav['log']->debug("[Hulk] Blocked by AbuseIPDB bulk: {$ip}");
+                            $this->grav['log']->debug("[Warden] Blocked by AbuseIPDB bulk: {$ip}");
                         }
                         $this->rejectRequest($request);
                         return;
@@ -171,12 +171,12 @@ class GrvhulkPlugin extends Plugin
                         : !empty($config['crowdsec']['lapi_api_key']);
 
                     if ($hasKey) {
-                        $cached = HulkDatabase::getCachedDecision($db, $ip, $source);
+                        $cached = BotwardenDatabase::getCachedDecision($db, $ip, $source);
                         if ($cached === null) {
                             // Single-flight: a brief sentinel stops concurrent FPM
                             // workers from all calling the API at once and burning
                             // the CTI free-tier quota (50/day).
-                            HulkDatabase::setCachedDecision($db, $ip, $source, 'clean', 0, 10);
+                            BotwardenDatabase::setCachedDecision($db, $ip, $source, 'clean', 0, 10);
                             $client = new CrowdSecClient($config['crowdsec'], $db);
                             $result = $client->checkIp($ip);
                             // Cache only authoritative results; a fail-open "clean"
@@ -184,13 +184,13 @@ class GrvhulkPlugin extends Plugin
                             // IP as clean for the full TTL (it keeps the 10s sentinel
                             // and is retried shortly).
                             if (!empty($result['cacheable'])) {
-                                HulkDatabase::setCachedDecision($db, $ip, $source, $result['decision'], $result['score'], $ttl);
+                                BotwardenDatabase::setCachedDecision($db, $ip, $source, $result['decision'], $result['score'], $ttl);
                             }
                             $cached = $result;
                         }
                         if (($cached['decision'] ?? 'clean') === 'block') {
                             if ($config['logging'] ?? false) {
-                                $this->grav['log']->debug("[Hulk] Blocked by CrowdSec {$mode} (score:{$cached['score']}): {$ip}");
+                                $this->grav['log']->debug("[Warden] Blocked by CrowdSec {$mode} (score:{$cached['score']}): {$ip}");
                             }
                             $this->rejectRequest($request);
                             return;
@@ -217,7 +217,7 @@ class GrvhulkPlugin extends Plugin
                             // bypass the filter. (Malformed patterns instead surface
                             // as PREG_NO_ERROR/INTERNAL and are skipped below.)
                             if ($config['logging'] ?? false) {
-                                $this->grav['log']->error("[Hulk] Regex runtime error (code {$err}) on filter '{$filter}' — failing closed: {$uri}");
+                                $this->grav['log']->error("[Warden] Regex runtime error (code {$err}) on filter '{$filter}' — failing closed: {$uri}");
                             }
                             if ($config['enable_blacklisting'] ?? true) {
                                 $this->rejectRequest($request);
@@ -226,21 +226,21 @@ class GrvhulkPlugin extends Plugin
                         }
                         // Invalid pattern (compile error) — skip just this filter.
                         if ($config['logging'] ?? false) {
-                            $this->grav['log']->warning("[Hulk] Invalid filter pattern skipped: '{$filter}'");
+                            $this->grav['log']->warning("[Warden] Invalid filter pattern skipped: '{$filter}'");
                         }
                         continue;
                     }
                     if ($match === 1) {
                         if ($config['logging'] ?? false) {
-                            $this->grav['log']->debug("[Hulk] URI matched filter '{$filter}': {$uri}");
+                            $this->grav['log']->debug("[Warden] URI matched filter '{$filter}': {$uri}");
                         }
-                        HulkDatabase::addIpToLocal($db, $ip, 'URI filter: ' . $filter);
+                        BotwardenDatabase::addIpToLocal($db, $ip, 'URI filter: ' . $filter);
                         if (!empty($config['enable_reporting']) && !empty($config['abuseipdb']['api_key'])) {
                             // Queue the report (path only — the query string may carry
                             // secrets) for the scheduler to send, so we never block the
                             // request on a synchronous external API call.
                             $pathOnly = parse_url($uri, PHP_URL_PATH) ?: '/';
-                            HulkDatabase::enqueueReport($db, $ip, $pathOnly);
+                            BotwardenDatabase::enqueueReport($db, $ip, $pathOnly);
                         }
                         if ($config['enable_blacklisting'] ?? true) {
                             $this->rejectRequest($request);
@@ -251,14 +251,14 @@ class GrvhulkPlugin extends Plugin
             }
         } catch (\Throwable $e) {
             if ($config['logging'] ?? false) {
-                $this->grav['log']->error('[Hulk] Security check error, allowing request (fail-open): ' . $e->getMessage());
+                $this->grav['log']->error('[Warden] Security check error, allowing request (fail-open): ' . $e->getMessage());
             }
             return;
         }
     }
 
     // -------------------------------------------------------------------------
-    // Admin JSON API  (POST /admin/grvhulk/data)
+    // Admin JSON API  (POST /admin/botwarden/data)
     // -------------------------------------------------------------------------
 
     private function handleAdminApi($request): void
@@ -286,26 +286,26 @@ class GrvhulkPlugin extends Plugin
 
         $action  = $body['action'] ?? '';
         $db      = $this->getDb();
-        $dataDir = $this->grav['locator']->findResource('user://data', true) . '/grvhulk';
+        $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
 
         switch ($action) {
             case 'stats':
-                $data = HulkDatabase::getStats($db, $dataDir);
+                $data = BotwardenDatabase::getStats($db, $dataDir);
                 break;
 
             case 'local-list':
                 $limit  = min((int)($body['limit'] ?? 50), 200);
                 $offset = max((int)($body['offset'] ?? 0), 0);
                 $data   = [
-                    'entries' => HulkDatabase::getLocalPaginated($db, $limit, $offset),
-                    'total'   => HulkDatabase::getLocalCount($db),
+                    'entries' => BotwardenDatabase::getLocalPaginated($db, $limit, $offset),
+                    'total'   => BotwardenDatabase::getLocalCount($db),
                     'limit'   => $limit,
                     'offset'  => $offset,
                 ];
                 break;
 
             case 'search':
-                $entry = HulkDatabase::searchLocal($db, $body['ip'] ?? '');
+                $entry = BotwardenDatabase::searchLocal($db, $body['ip'] ?? '');
                 $data  = ['found' => $entry !== null, 'entry' => $entry];
                 break;
 
@@ -317,13 +317,13 @@ class GrvhulkPlugin extends Plugin
                     return;
                 }
                 // Manual entries are exempt from TTL expiry and auto-clean trimming.
-                HulkDatabase::addIpToLocal($db, $ip, $reason, true);
+                BotwardenDatabase::addIpToLocal($db, $ip, $reason, true);
                 $data = ['success' => true];
                 break;
 
             case 'remove':
                 $ip = trim($body['ip'] ?? '');
-                HulkDatabase::removeIpFromLocal($db, $ip);
+                BotwardenDatabase::removeIpFromLocal($db, $ip);
                 $data = ['success' => true];
                 break;
 
@@ -331,8 +331,8 @@ class GrvhulkPlugin extends Plugin
                 $limit  = min((int)($body['limit'] ?? 50), 200);
                 $offset = max((int)($body['offset'] ?? 0), 0);
                 $data   = [
-                    'entries' => HulkDatabase::getHistory($db, $limit, $offset),
-                    'total'   => HulkDatabase::getHistoryCount($db),
+                    'entries' => BotwardenDatabase::getHistory($db, $limit, $offset),
+                    'total'   => BotwardenDatabase::getHistoryCount($db),
                     'limit'   => $limit,
                     'offset'  => $offset,
                 ];
@@ -386,8 +386,8 @@ class GrvhulkPlugin extends Plugin
     private function getDb(): SQLite3
     {
         if (self::$dbInstance === null) {
-            $dataDir         = $this->grav['locator']->findResource('user://data', true) . '/grvhulk';
-            self::$dbInstance = HulkDatabase::getInstance($dataDir);
+            $dataDir         = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
+            self::$dbInstance = BotwardenDatabase::getInstance($dataDir);
         }
         return self::$dbInstance;
     }
@@ -424,33 +424,33 @@ class GrvhulkPlugin extends Plugin
         $config    = $this->config();
 
         if (!empty($config['auto_clean'])) {
-            $job = $scheduler->addFunction('Grav\Plugin\GrvhulkPlugin::taskCleanBlacklists', [], 'grvhulk-auto-clean');
-            $job->backlink('plugins/grvhulk');
+            $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskCleanBlacklists', [], 'botwarden-auto-clean');
+            $job->backlink('plugins/botwarden');
             $job->at('35 2 * * *');
         }
 
         // History pruning runs independently of auto_clean: the audit log is
         // written on every block/unblock, so it must be bounded even when the
         // blacklist auto-clean is disabled.
-        $job = $scheduler->addFunction('Grav\Plugin\GrvhulkPlugin::taskPruneHistory', [], 'grvhulk-prune-history');
-        $job->backlink('plugins/grvhulk');
+        $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskPruneHistory', [], 'botwarden-prune-history');
+        $job->backlink('plugins/botwarden');
         $job->at('30 3 * * *');
 
         if (!empty($config['auto_cache']) && !empty($config['sources']['abuseipdb_bulk']) && !empty($config['abuseipdb']['api_key'])) {
-            $job = $scheduler->addFunction('Grav\Plugin\GrvhulkPlugin::taskUpdateAbuseipdbBulk', [], 'grvhulk-abuseipdb-cache');
-            $job->backlink('plugins/grvhulk');
+            $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskUpdateAbuseipdbBulk', [], 'botwarden-abuseipdb-cache');
+            $job->backlink('plugins/botwarden');
             $job->at('45 2 * * *');
         }
 
         if (!empty($config['sources']['dark_visitors']) && !empty($config['dark_visitors']['api_key'])) {
-            $job = $scheduler->addFunction('Grav\Plugin\GrvhulkPlugin::taskUpdateDarkVisitors', [], 'grvhulk-dark-visitors');
-            $job->backlink('plugins/grvhulk');
+            $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskUpdateDarkVisitors', [], 'botwarden-dark-visitors');
+            $job->backlink('plugins/botwarden');
             $job->at('0 3 * * *');
         }
 
         if (!empty($config['enable_reporting']) && !empty($config['abuseipdb']['api_key'])) {
-            $job = $scheduler->addFunction('Grav\Plugin\GrvhulkPlugin::taskFlushReports', [], 'grvhulk-flush-reports');
-            $job->backlink('plugins/grvhulk');
+            $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskFlushReports', [], 'botwarden-flush-reports');
+            $job->backlink('plugins/botwarden');
             $job->at('*/10 * * * *');
         }
     }
@@ -461,8 +461,8 @@ class GrvhulkPlugin extends Plugin
 
     public function onAdminMenu(): void
     {
-        $this->grav['twig']->plugins_hooked_nav['GRVHulk'] = [
-            'hint'      => 'Hulk IP Security Manager',
+        $this->grav['twig']->plugins_hooked_nav['botWarden'] = [
+            'hint'      => 'Warden IP Security Manager',
             'route'     => 'hulk',
             'icon'      => 'fa-shield',
             'authorize' => 'admin.users',
@@ -483,25 +483,25 @@ class GrvhulkPlugin extends Plugin
     public static function taskCleanBlacklists(): void
     {
         $grav    = Grav::instance();
-        $config  = $grav['config']->get('plugins.grvhulk');
-        $dataDir = $grav['locator']->findResource('user://data', true) . '/grvhulk';
-        $db      = HulkDatabase::getInstance($dataDir);
+        $config  = $grav['config']->get('plugins.botwarden');
+        $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
+        $db      = BotwardenDatabase::getInstance($dataDir);
         $limit   = (int)($config['auto_clean_limit'] ?? 10000);
 
         $localTtl    = (int)($config['local_ttl'] ?? 86400);
         $historyTtl  = (int)($config['history_ttl'] ?? 2592000);
         $historyMax  = (int)($config['history_max_rows'] ?? 50000);
 
-        $expired     = HulkDatabase::pruneExpiredLocal($db, $localTtl);
-        HulkDatabase::trimLocal($db, $limit);
-        HulkDatabase::pruneExpiredCache($db);
+        $expired     = BotwardenDatabase::pruneExpiredLocal($db, $localTtl);
+        BotwardenDatabase::trimLocal($db, $limit);
+        BotwardenDatabase::pruneExpiredCache($db);
         // Prune history here too so the VACUUM below reclaims its pages, but the
-        // authoritative schedule is the dedicated grvhulk-prune-history job,
+        // authoritative schedule is the dedicated botwarden-prune-history job,
         // which runs even when auto_clean is disabled.
-        $histPruned  = HulkDatabase::pruneHistory($db, $historyTtl, $historyMax);
+        $histPruned  = BotwardenDatabase::pruneHistory($db, $historyTtl, $historyMax);
         $db->exec('VACUUM');
 
-        echo "Hulk: pruned {$expired} expired local entries (ttl:{$localTtl}s), trimmed to {$limit}, pruned {$histPruned} history rows, vacuumed DB.\n";
+        echo "Warden: pruned {$expired} expired local entries (ttl:{$localTtl}s), trimmed to {$limit}, pruned {$histPruned} history rows, vacuumed DB.\n";
     }
 
     /**
@@ -513,66 +513,66 @@ class GrvhulkPlugin extends Plugin
     public static function taskPruneHistory(): void
     {
         $grav    = Grav::instance();
-        $config  = $grav['config']->get('plugins.grvhulk');
-        $dataDir = $grav['locator']->findResource('user://data', true) . '/grvhulk';
-        $db      = HulkDatabase::getInstance($dataDir);
+        $config  = $grav['config']->get('plugins.botwarden');
+        $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
+        $db      = BotwardenDatabase::getInstance($dataDir);
 
         $historyTtl = (int)($config['history_ttl'] ?? 2592000);
         $historyMax = (int)($config['history_max_rows'] ?? 50000);
-        $pruned     = HulkDatabase::pruneHistory($db, $historyTtl, $historyMax);
+        $pruned     = BotwardenDatabase::pruneHistory($db, $historyTtl, $historyMax);
 
-        echo "Hulk: pruned {$pruned} history rows (ttl:{$historyTtl}s, max:{$historyMax}).\n";
+        echo "Warden: pruned {$pruned} history rows (ttl:{$historyTtl}s, max:{$historyMax}).\n";
     }
 
     public static function taskUpdateAbuseipdbBulk(): void
     {
         $grav   = Grav::instance();
-        $config = $grav['config']->get('plugins.grvhulk');
+        $config = $grav['config']->get('plugins.botwarden');
 
         if (empty($config['abuseipdb']['api_key'])) {
-            echo "Hulk: AbuseIPDB api_key not configured, skipping bulk update.\n";
+            echo "Warden: AbuseIPDB api_key not configured, skipping bulk update.\n";
             return;
         }
 
-        $dataDir = $grav['locator']->findResource('user://data', true) . '/grvhulk';
-        $db      = HulkDatabase::getInstance($dataDir);
+        $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
+        $db      = BotwardenDatabase::getInstance($dataDir);
         $client  = new AbuseIpDbClient($config['abuseipdb']);
         $limit   = (int)($config['abuseipdb']['bulk_limit'] ?? 10000);
 
         try {
             $ips   = $client->fetchBulkBlacklist($limit);
-            $count = HulkDatabase::replaceBulkList($db, $ips);
-            HulkDatabase::setMeta($db, 'abuseipdb_bulk_updated', (string)time());
-            HulkDatabase::setMeta($db, 'abuseipdb_bulk_count', (string)$count);
-            echo "Hulk: AbuseIPDB bulk updated ({$count} IPs).\n";
+            $count = BotwardenDatabase::replaceBulkList($db, $ips);
+            BotwardenDatabase::setMeta($db, 'abuseipdb_bulk_updated', (string)time());
+            BotwardenDatabase::setMeta($db, 'abuseipdb_bulk_count', (string)$count);
+            echo "Warden: AbuseIPDB bulk updated ({$count} IPs).\n";
         } catch (\Throwable $e) {
-            echo "Hulk: AbuseIPDB bulk update failed: " . $e->getMessage() . "\n";
+            echo "Warden: AbuseIPDB bulk update failed: " . $e->getMessage() . "\n";
         }
     }
 
     public static function taskUpdateDarkVisitors(): void
     {
         $grav   = Grav::instance();
-        $config = $grav['config']->get('plugins.grvhulk');
+        $config = $grav['config']->get('plugins.botwarden');
 
         if (empty($config['dark_visitors']['api_key'])) {
-            echo "Hulk: Known Agents api_key not configured, skipping update.\n";
+            echo "Warden: Known Agents api_key not configured, skipping update.\n";
             return;
         }
 
-        $dataDir = $grav['locator']->findResource('user://data', true) . '/grvhulk';
-        $db      = HulkDatabase::getInstance($dataDir);
+        $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
+        $db      = BotwardenDatabase::getInstance($dataDir);
         $client  = new DarkVisitorsClient($config['dark_visitors']['api_key']);
         $types   = self::normalizeAgentTypes($config['dark_visitors']['agent_types'] ?? []);
 
         try {
             $agents = $client->fetchAgents($types);
-            HulkDatabase::replaceDarkVisitorsAgents($db, $agents);
-            HulkDatabase::setMeta($db, 'dark_visitors_updated', (string)time());
+            BotwardenDatabase::replaceDarkVisitorsAgents($db, $agents);
+            BotwardenDatabase::setMeta($db, 'dark_visitors_updated', (string)time());
             $count = count($agents);
-            echo "Hulk: Known Agents list updated ({$count} user-agents).\n";
+            echo "Warden: Known Agents list updated ({$count} user-agents).\n";
         } catch (\Throwable $e) {
-            echo "Hulk: Known Agents update failed: " . $e->getMessage() . "\n";
+            echo "Warden: Known Agents update failed: " . $e->getMessage() . "\n";
         }
     }
 
@@ -584,30 +584,30 @@ class GrvhulkPlugin extends Plugin
     public static function taskFlushReports(): void
     {
         $grav   = Grav::instance();
-        $config = $grav['config']->get('plugins.grvhulk');
+        $config = $grav['config']->get('plugins.botwarden');
 
         if (empty($config['abuseipdb']['api_key'])) {
-            echo "Hulk: AbuseIPDB api_key not configured, skipping report flush.\n";
+            echo "Warden: AbuseIPDB api_key not configured, skipping report flush.\n";
             return;
         }
 
-        $dataDir = $grav['locator']->findResource('user://data', true) . '/grvhulk';
-        $db      = HulkDatabase::getInstance($dataDir);
+        $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
+        $db      = BotwardenDatabase::getInstance($dataDir);
         $client  = new AbuseIpDbClient($config['abuseipdb']);
 
         $sent = 0;
         $failed = 0;
-        foreach (HulkDatabase::getPendingReports($db, 200) as $report) {
+        foreach (BotwardenDatabase::getPendingReports($db, 200) as $report) {
             if ($client->reportIp($report['ip'], $report['path'])) {
-                HulkDatabase::deleteReport($db, (int)$report['id']);
+                BotwardenDatabase::deleteReport($db, (int)$report['id']);
                 $sent++;
             } else {
                 // Keep the row for a later retry (dropped after maxAttempts).
-                HulkDatabase::failReport($db, (int)$report['id']);
+                BotwardenDatabase::failReport($db, (int)$report['id']);
                 $failed++;
             }
         }
 
-        echo "Hulk: flushed {$sent} queued AbuseIPDB report(s), {$failed} deferred.\n";
+        echo "Warden: flushed {$sent} queued AbuseIPDB report(s), {$failed} deferred.\n";
     }
 }

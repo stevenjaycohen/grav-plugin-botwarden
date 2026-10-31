@@ -1,5 +1,5 @@
 <?php
-namespace Grav\Plugin\Grvhulk;
+namespace Grav\Plugin\Botwarden;
 
 /**
  * Read-only discovery of an existing GRVHulk installation.

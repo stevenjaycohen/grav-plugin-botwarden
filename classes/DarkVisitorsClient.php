@@ -1,5 +1,5 @@
 <?php
-namespace Grav\Plugin\Grvhulk;
+namespace Grav\Plugin\Botwarden;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;

@@ -1,5 +1,5 @@
 <?php
-namespace Grav\Plugin\Grvhulk;
+namespace Grav\Plugin\Botwarden;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
@@ -51,7 +51,7 @@ class CrowdSecClient
         }
 
         // Check quota guard
-        $quotaUntil = HulkDatabase::getMeta($this->db, 'crowdsec_cti_quota_reset');
+        $quotaUntil = BotwardenDatabase::getMeta($this->db, 'crowdsec_cti_quota_reset');
         if ($quotaUntil !== null && (int)$quotaUntil > time()) {
             return self::clean('CTI quota exceeded');
         }
@@ -86,7 +86,7 @@ class CrowdSecClient
                 } catch (\Exception $ex) {
                     $midnight = time() + 86400;
                 }
-                HulkDatabase::setMeta($this->db, 'crowdsec_cti_quota_reset', (string)$midnight);
+                BotwardenDatabase::setMeta($this->db, 'crowdsec_cti_quota_reset', (string)$midnight);
                 return self::clean('CTI quota exceeded');
             }
             return self::clean();

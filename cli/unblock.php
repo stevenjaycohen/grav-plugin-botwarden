@@ -1,16 +1,16 @@
 #!/usr/bin/env php
 <?php
 /**
- * GRVHulk — Emergency IP unblock tool
+ * botWarden — Emergency IP unblock tool
  *
  * Run from your Grav root when you have locked yourself out of the admin UI:
  *
- *   php user/plugins/grvhulk/cli/unblock.php 203.0.113.5
+ *   php user/plugins/botwarden/cli/unblock.php 203.0.113.5
  *
  * Options:
  *   --list         Show the last 25 IPs in the local blacklist
  *   --whitelist    Also add the IP to hulk.yaml whitelist (persistent)
- *   --db=PATH      Override the path to grvhulk.sqlite
+ *   --db=PATH      Override the path to botwarden.sqlite
  */
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
@@ -38,15 +38,15 @@ for ($i = 1; $i < $argc; $i++) {
 
 if (!$list && !$ip) {
     fwrite(STDERR, <<<'USAGE'
-GRVHulk emergency unblock
+botWarden emergency unblock
 
 Usage:
   php cli/unblock.php <ip>             Remove IP from local blacklist
   php cli/unblock.php --list           Show last 25 blocked IPs
-  php cli/unblock.php <ip> --whitelist Also add IP to grvhulk.yaml whitelist
+  php cli/unblock.php <ip> --whitelist Also add IP to botwarden.yaml whitelist
 
 Options:
-  --db=PATH   Override path to grvhulk.sqlite
+  --db=PATH   Override path to botwarden.sqlite
 
 USAGE);
     exit(1);
@@ -55,17 +55,17 @@ USAGE);
 // ── Locate the database ───────────────────────────────────────────────────────
 
 if (!$dbPath) {
-    // When running as: php user/plugins/grvhulk/cli/unblock.php
-    // __DIR__ = [grav-root]/user/plugins/grvhulk/cli
-    $candidate = __DIR__ . '/../../../data/grvhulk/grvhulk.sqlite';
+    // When running as: php user/plugins/botwarden/cli/unblock.php
+    // __DIR__ = [grav-root]/user/plugins/botwarden/cli
+    $candidate = __DIR__ . '/../../../data/botwarden/botwarden.sqlite';
     if (file_exists($candidate)) {
         $dbPath = realpath($candidate);
     }
 }
 
 if (!$dbPath || !file_exists($dbPath)) {
-    fwrite(STDERR, "Error: cannot find grvhulk.sqlite.\n");
-    fwrite(STDERR, "Run from Grav root, or pass --db=/path/to/grvhulk.sqlite\n");
+    fwrite(STDERR, "Error: cannot find botwarden.sqlite.\n");
+    fwrite(STDERR, "Run from Grav root, or pass --db=/path/to/botwarden.sqlite\n");
     exit(1);
 }
 
@@ -117,14 +117,14 @@ if ($removed > 0) {
     echo "Info: $ip was not in the local blacklist.\n";
 }
 
-// ── --whitelist: append to grvhulk.yaml ──────────────────────────────────────
+// ── --whitelist: append to botwarden.yaml ──────────────────────────────────────
 
 if ($addWl) {
-    // Write to the user override only: [grav-root]/user/config/plugins/grvhulk.yaml.
-    // __DIR__ = [grav-root]/user/plugins/grvhulk/cli, so three '..' reach `user`.
+    // Write to the user override only: [grav-root]/user/config/plugins/botwarden.yaml.
+    // __DIR__ = [grav-root]/user/plugins/botwarden/cli, so three '..' reach `user`.
     // Never touch the plugin's bundled default (it would be lost on update and
     // shipped config should stay pristine).
-    $yamlPath = __DIR__ . '/../../../config/plugins/grvhulk.yaml';
+    $yamlPath = __DIR__ . '/../../../config/plugins/botwarden.yaml';
 
     if (!file_exists($yamlPath)) {
         // No user override yet — create a fresh one containing just this entry.

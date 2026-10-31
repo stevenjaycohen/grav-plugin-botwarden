@@ -1,7 +1,7 @@
 <?php
-namespace Grav\Plugin\Grvhulk\Tests;
+namespace Grav\Plugin\Botwarden\Tests;
 
-use Grav\Plugin\Grvhulk\IpDetector;
+use Grav\Plugin\Botwarden\IpDetector;
 use PHPUnit\Framework\TestCase;
 
 class IpDetectorTest extends TestCase

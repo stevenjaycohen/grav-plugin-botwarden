@@ -1,15 +1,15 @@
 <?php
-namespace Grav\Plugin\Grvhulk;
+namespace Grav\Plugin\Botwarden;
 
 use SQLite3;
 use Grav\Common\Filesystem\Folder;
 
 /**
- * SQLite3 database manager for GRVHulk plugin.
+ * SQLite3 database manager for botWarden plugin.
  * All methods are static and accept SQLite3 instance as first argument
  * to allow use from both request context and scheduler (separate process).
  */
-class HulkDatabase
+class BotwardenDatabase
 {
     /** Bump when the schema or a migration changes; gates createSchema(). */
     private const SCHEMA_VERSION = 4;
@@ -26,7 +26,7 @@ class HulkDatabase
             Folder::create($dataDir);
         }
 
-        $db = new SQLite3($dataDir . '/grvhulk.sqlite');
+        $db = new SQLite3($dataDir . '/botwarden.sqlite');
         $db->enableExceptions(true);
         // Wait for a lock instead of throwing immediately, so a request that
         // hits the DB while the scheduler is writing (VACUUM, bulk swap) does
@@ -557,7 +557,7 @@ class HulkDatabase
 
     public static function getStats(SQLite3 $db, string $dataDir): array
     {
-        $dbPath = $dataDir . '/grvhulk.sqlite';
+        $dbPath = $dataDir . '/botwarden.sqlite';
         return [
             'local_count'         => self::getLocalCount($db),
             'history_count'       => self::getHistoryCount($db),

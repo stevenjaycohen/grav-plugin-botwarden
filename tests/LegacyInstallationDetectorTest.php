@@ -1,7 +1,7 @@
 <?php
-namespace Grav\Plugin\Grvhulk\Tests;
+namespace Grav\Plugin\Botwarden\Tests;
 
-use Grav\Plugin\Grvhulk\LegacyInstallationDetector;
+use Grav\Plugin\Botwarden\LegacyInstallationDetector;
 use PHPUnit\Framework\TestCase;
 
 final class LegacyInstallationDetectorTest extends TestCase

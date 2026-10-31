@@ -10,7 +10,7 @@
 // ── Global code (autoloader + plugin file) ───────────────────────────────────
 namespace {
     require_once __DIR__ . '/../vendor/autoload.php';
-    require_once __DIR__ . '/../grvhulk.php';
+    require_once __DIR__ . '/../botwarden.php';
 }
 
 // ── Grav\Common\Filesystem\Folder ───────────────────────────────────────────

@@ -1,5 +1,5 @@
 <?php
-namespace Grav\Plugin\Grvhulk;
+namespace Grav\Plugin\Botwarden;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
@@ -91,7 +91,7 @@ class AbuseIpDbClient
                 'form_params' => [
                     'ip'         => $ip,
                     'categories' => (string)$category,
-                    'comment'    => 'Blocked by GRVHulk. Path: ' . substr($path, 0, 500),
+                    'comment'    => 'Blocked by botWarden. Path: ' . substr($path, 0, 500),
                 ],
             ]);
             return $response->getStatusCode() === 200;

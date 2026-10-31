@@ -2,10 +2,10 @@
 
 {% block content %}
 <div class="admin-pages">
-<div class="grvhulk-admin">
+<div class="botwarden-admin">
 
 <div class="admin-block">
-  <h1><i class="fa fa-shield"></i> Grvhulk Security</h1>
+  <h1><i class="fa fa-shield"></i> Botwarden Security</h1>
   <p>
     <a href="{{ base_url_relative }}/admin/plugins/hulk" class="button">
       <i class="fa fa-cog"></i> Settings
@@ -16,7 +16,7 @@
 {# --- Statistics --- #}
 <div class="admin-block">
   <h2>Statistics</h2>
-  <div id="grvhulk-stats">
+  <div id="botwarden-stats">
     <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
   </div>
 </div>
@@ -24,14 +24,14 @@
 {# --- IP Management --- #}
 <div class="admin-block">
   <h2>Local Blacklist — Search / Add / Remove</h2>
-  <div class="grvhulk-ip-form">
-    <input type="text" id="grvhulk-ip-input" placeholder="192.168.1.1" style="width:200px;" />
-    <input type="text" id="grvhulk-reason-input" placeholder="Reason (optional)" style="width:200px;" />
-    <button class="button" onclick="grvhulkAction('search')"><i class="fa fa-search"></i> Search</button>
-    <button class="button" onclick="grvhulkAction('add')"><i class="fa fa-plus"></i> Add</button>
-    <button class="button" onclick="grvhulkAction('remove')"><i class="fa fa-trash"></i> Remove</button>
+  <div class="botwarden-ip-form">
+    <input type="text" id="botwarden-ip-input" placeholder="192.168.1.1" style="width:200px;" />
+    <input type="text" id="botwarden-reason-input" placeholder="Reason (optional)" style="width:200px;" />
+    <button class="button" onclick="botwardenAction('search')"><i class="fa fa-search"></i> Search</button>
+    <button class="button" onclick="botwardenAction('add')"><i class="fa fa-plus"></i> Add</button>
+    <button class="button" onclick="botwardenAction('remove')"><i class="fa fa-trash"></i> Remove</button>
   </div>
-  <div id="grvhulk-action-result" style="margin-top:1em; font-weight:bold;"></div>
+  <div id="botwarden-action-result" style="margin-top:1em; font-weight:bold;"></div>
 </div>
 
 {# --- Blocked IPs (paginated) --- #}
@@ -40,10 +40,10 @@
     Blocked IPs
     <button class="button" onclick="loadLocalList(0)" style="float:right;"><i class="fa fa-refresh"></i></button>
   </h2>
-  <div id="grvhulk-local-list">
+  <div id="botwarden-local-list">
     <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
   </div>
-  <div id="grvhulk-local-pager" style="margin-top:.8em; text-align:center;"></div>
+  <div id="botwarden-local-pager" style="margin-top:.8em; text-align:center;"></div>
 </div>
 
 {# --- Block History --- #}
@@ -52,37 +52,37 @@
     Block History
     <button class="button" onclick="loadHistory(0)" style="float:right;"><i class="fa fa-refresh"></i></button>
   </h2>
-  <div id="grvhulk-history">
+  <div id="botwarden-history">
     <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
   </div>
-  <div id="grvhulk-history-pager" style="margin-top:.8em; text-align:center;"></div>
+  <div id="botwarden-history-pager" style="margin-top:.8em; text-align:center;"></div>
 </div>
 
-</div>{# /grvhulk-admin #}
+</div>{# /botwarden-admin #}
 </div>{# /admin-pages #}
 
 <style>
-.grvhulk-admin .admin-block { background:#fff; border:1px solid #ddd; border-radius:4px; padding:1.5em; margin-bottom:1.5em; }
-.grvhulk-admin h1 { margin-top:0; }
-.grvhulk-admin h2 { font-size:1.1em; margin-top:0; border-bottom:1px solid #eee; padding-bottom:.5em; }
-.grvhulk-admin table { width:100%; border-collapse:collapse; font-size:.9em; }
-.grvhulk-admin table th { text-align:left; padding:.4em .8em; background:#f5f5f5; border-bottom:2px solid #ddd; }
-.grvhulk-admin table td { padding:.4em .8em; border-bottom:1px solid #f0f0f0; }
-.grvhulk-admin .stat-grid { display:flex; flex-wrap:wrap; gap:1em; }
-.grvhulk-admin .stat-box { background:#f9f9f9; border:1px solid #e0e0e0; border-radius:4px; padding:1em 1.5em; min-width:150px; text-align:center; }
-.grvhulk-admin .stat-box .stat-num { font-size:2em; font-weight:bold; color:#333; }
-.grvhulk-admin .stat-box .stat-label { font-size:.8em; color:#888; }
-.grvhulk-ip-form input { margin-right:.5em; padding:.4em; border:1px solid #ccc; border-radius:3px; }
-.grvhulk-admin .badge-block  { display:inline-block; padding:.1em .5em; border-radius:3px; font-size:.8em; background:#fdd; color:#900; }
-.grvhulk-admin .badge-unblock{ display:inline-block; padding:.1em .5em; border-radius:3px; font-size:.8em; background:#dfd; color:#060; }
-.grvhulk-admin .badge-manual  { display:inline-block; padding:.1em .4em; border-radius:3px; font-size:.75em; background:#e8e8ff; color:#44a; margin-left:.3em; }
-.grvhulk-history-pager-btn { margin:0 .2em; padding:.3em .7em; border:1px solid #ccc; border-radius:3px; background:#fff; cursor:pointer; }
-.grvhulk-history-pager-btn:disabled { opacity:.4; cursor:default; }
+.botwarden-admin .admin-block { background:#fff; border:1px solid #ddd; border-radius:4px; padding:1.5em; margin-bottom:1.5em; }
+.botwarden-admin h1 { margin-top:0; }
+.botwarden-admin h2 { font-size:1.1em; margin-top:0; border-bottom:1px solid #eee; padding-bottom:.5em; }
+.botwarden-admin table { width:100%; border-collapse:collapse; font-size:.9em; }
+.botwarden-admin table th { text-align:left; padding:.4em .8em; background:#f5f5f5; border-bottom:2px solid #ddd; }
+.botwarden-admin table td { padding:.4em .8em; border-bottom:1px solid #f0f0f0; }
+.botwarden-admin .stat-grid { display:flex; flex-wrap:wrap; gap:1em; }
+.botwarden-admin .stat-box { background:#f9f9f9; border:1px solid #e0e0e0; border-radius:4px; padding:1em 1.5em; min-width:150px; text-align:center; }
+.botwarden-admin .stat-box .stat-num { font-size:2em; font-weight:bold; color:#333; }
+.botwarden-admin .stat-box .stat-label { font-size:.8em; color:#888; }
+.botwarden-ip-form input { margin-right:.5em; padding:.4em; border:1px solid #ccc; border-radius:3px; }
+.botwarden-admin .badge-block  { display:inline-block; padding:.1em .5em; border-radius:3px; font-size:.8em; background:#fdd; color:#900; }
+.botwarden-admin .badge-unblock{ display:inline-block; padding:.1em .5em; border-radius:3px; font-size:.8em; background:#dfd; color:#060; }
+.botwarden-admin .badge-manual  { display:inline-block; padding:.1em .4em; border-radius:3px; font-size:.75em; background:#e8e8ff; color:#44a; margin-left:.3em; }
+.botwarden-history-pager-btn { margin:0 .2em; padding:.3em .7em; border:1px solid #ccc; border-radius:3px; background:#fff; cursor:pointer; }
+.botwarden-history-pager-btn:disabled { opacity:.4; cursor:default; }
 </style>
 
 <script>
 (function () {
-  var API = '{{ base_url_relative }}/admin/grvhulk/data';
+  var API = '{{ base_url_relative }}/admin/botwarden/data';
   var nonce = '{{ admin.nonce }}';
 
   // Escape text before inserting into innerHTML to prevent stored XSS.
@@ -101,7 +101,7 @@
     })
     .then(function(r) { return r.json(); })
     .then(cb)
-    .catch(function(e) { console.error('Grvhulk API error', e); });
+    .catch(function(e) { console.error('Botwarden API error', e); });
   }
 
   function loadStats() {
@@ -112,7 +112,7 @@
       var updated_dv = data.dark_visitors_updated
         ? new Date(data.dark_visitors_updated * 1000).toLocaleString()
         : 'Never';
-      document.getElementById('grvhulk-stats').innerHTML =
+      document.getElementById('botwarden-stats').innerHTML =
         '<div class="stat-grid">' +
         '<div class="stat-box"><div class="stat-num">' + (data.local_count || 0) + '</div><div class="stat-label">Local Blacklist</div></div>' +
         '<div class="stat-box"><div class="stat-num">' + (data.history_count || 0) + '</div><div class="stat-label">History Entries</div></div>' +
@@ -128,11 +128,11 @@
 
   window.loadLocalList = function(offset) {
     localCurrentOffset = offset || 0;
-    document.getElementById('grvhulk-local-list').innerHTML = '<p><i class="fa fa-spinner fa-spin"></i> Loading…</p>';
-    document.getElementById('grvhulk-local-pager').innerHTML = '';
+    document.getElementById('botwarden-local-list').innerHTML = '<p><i class="fa fa-spinner fa-spin"></i> Loading…</p>';
+    document.getElementById('botwarden-local-pager').innerHTML = '';
     post('local-list', { limit: LOCAL_LIMIT, offset: localCurrentOffset }, function(data) {
       if (!data.entries || !data.entries.length) {
-        document.getElementById('grvhulk-local-list').innerHTML = '<p><em>No blocked IPs.</em></p>';
+        document.getElementById('botwarden-local-list').innerHTML = '<p><em>No blocked IPs.</em></p>';
         return;
       }
       var rows = data.entries.map(function(e) {
@@ -144,11 +144,11 @@
           '<td><button class="button" onclick="removeIp(\'' + esc(e.ip) + '\')"><i class="fa fa-trash"></i></button></td>' +
           '</tr>';
       });
-      document.getElementById('grvhulk-local-list').innerHTML =
+      document.getElementById('botwarden-local-list').innerHTML =
         '<table><thead><tr><th>IP</th><th>Reason</th><th>Added</th><th></th></tr></thead><tbody>' +
         rows.join('') + '</tbody></table>';
 
-      renderPager('grvhulk-local-pager', data.total, LOCAL_LIMIT, localCurrentOffset, 'loadLocalList');
+      renderPager('botwarden-local-pager', data.total, LOCAL_LIMIT, localCurrentOffset, 'loadLocalList');
     });
   };
 
@@ -160,10 +160,10 @@
     });
   };
 
-  window.grvhulkAction = function(action) {
-    var ip = document.getElementById('grvhulk-ip-input').value.trim();
-    var reason = document.getElementById('grvhulk-reason-input').value.trim();
-    var resultEl = document.getElementById('grvhulk-action-result');
+  window.botwardenAction = function(action) {
+    var ip = document.getElementById('botwarden-ip-input').value.trim();
+    var reason = document.getElementById('botwarden-reason-input').value.trim();
+    var resultEl = document.getElementById('botwarden-action-result');
     resultEl.textContent = '';
 
     if (!ip) {
@@ -198,14 +198,14 @@
     var el = document.getElementById(containerId);
     if (pages <= 1) { el.innerHTML = ''; return; }
     var btns = '';
-    btns += '<button class="grvhulk-history-pager-btn" onclick="' + fnName + '(' + Math.max(0, (current - 1) * limit) + ')" ' + (current === 0 ? 'disabled' : '') + '>&lsaquo; Prev</button>';
+    btns += '<button class="botwarden-history-pager-btn" onclick="' + fnName + '(' + Math.max(0, (current - 1) * limit) + ')" ' + (current === 0 ? 'disabled' : '') + '>&lsaquo; Prev</button>';
     var start = Math.max(0, current - 2);
     var end   = Math.min(pages - 1, current + 2);
     for (var p = start; p <= end; p++) {
       var active = p === current ? ' style="font-weight:bold; background:#eef;"' : '';
-      btns += '<button class="grvhulk-history-pager-btn"' + active + ' onclick="' + fnName + '(' + (p * limit) + ')">' + (p + 1) + '</button>';
+      btns += '<button class="botwarden-history-pager-btn"' + active + ' onclick="' + fnName + '(' + (p * limit) + ')">' + (p + 1) + '</button>';
     }
-    btns += '<button class="grvhulk-history-pager-btn" onclick="' + fnName + '(' + Math.min((pages - 1) * limit, (current + 1) * limit) + ')" ' + (current >= pages - 1 ? 'disabled' : '') + '>Next &rsaquo;</button>';
+    btns += '<button class="botwarden-history-pager-btn" onclick="' + fnName + '(' + Math.min((pages - 1) * limit, (current + 1) * limit) + ')" ' + (current >= pages - 1 ? 'disabled' : '') + '>Next &rsaquo;</button>';
     btns += '<span style="margin-left:.5em; color:#888; font-size:.85em;">' + total + ' total</span>';
     el.innerHTML = btns;
   }
@@ -214,11 +214,11 @@
 
   window.loadHistory = function(offset) {
     offset = offset || 0;
-    document.getElementById('grvhulk-history').innerHTML = '<p><i class="fa fa-spinner fa-spin"></i> Loading…</p>';
-    document.getElementById('grvhulk-history-pager').innerHTML = '';
+    document.getElementById('botwarden-history').innerHTML = '<p><i class="fa fa-spinner fa-spin"></i> Loading…</p>';
+    document.getElementById('botwarden-history-pager').innerHTML = '';
     post('history', { limit: HISTORY_LIMIT, offset: offset }, function(data) {
       if (!data.entries || !data.entries.length) {
-        document.getElementById('grvhulk-history').innerHTML = '<p><em>No history yet.</em></p>';
+        document.getElementById('botwarden-history').innerHTML = '<p><em>No history yet.</em></p>';
         return;
       }
       var rows = data.entries.map(function(e) {
@@ -233,11 +233,11 @@
           '<td>' + new Date(e.acted_at * 1000).toLocaleString() + '</td>' +
           '</tr>';
       });
-      document.getElementById('grvhulk-history').innerHTML =
+      document.getElementById('botwarden-history').innerHTML =
         '<table><thead><tr><th>IP</th><th>Action</th><th>Reason</th><th>Date</th></tr></thead><tbody>' +
         rows.join('') + '</tbody></table>';
 
-      renderPager('grvhulk-history-pager', data.total, HISTORY_LIMIT, offset, 'loadHistory');
+      renderPager('botwarden-history-pager', data.total, HISTORY_LIMIT, offset, 'loadHistory');
     });
   };
 
