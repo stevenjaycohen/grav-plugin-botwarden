@@ -24,7 +24,7 @@
         <h2>botWarden</h2>
         <p>Application-layer request security and crawler policies. <a id="settings" href="#">Plugin settings</a></p>
         <section><h3>Security statistics</h3><div id="stats">Loading…</div></section>
-        <section><h3>GRVHulk migration</h3><div id="legacy">Checking…</div><button id="migrate" hidden>Import old settings and data</button></section>
+        <section id="legacy-migration" hidden><h3>GRVHulk migration</h3><div id="legacy">Checking…</div><button id="migrate" hidden>Import old settings and data</button></section>
         <section><h3>Local IP blacklist</h3>
           <label>IP <input id="ip" placeholder="203.0.113.7" autocomplete="off"></label>
           <label>Reason <input id="reason" placeholder="Manual block"></label>
@@ -52,6 +52,7 @@
         ]);
         this.shadowRoot.getElementById('stats').textContent =
           `Local: ${stats.local_count}; historical events: ${stats.history_count}; AbuseIPDB: ${stats.abuseipdb_bulk_count}; Known Agents: ${stats.dark_visitors_count}`;
+        this.shadowRoot.getElementById('legacy-migration').hidden = !!legacy.migration_complete;
         this.shadowRoot.getElementById('legacy').textContent = legacy.detected
           ? (legacy.can_migrate
             ? 'Older GRVHulk configuration/database detected. Import makes a backup and leaves botWarden disabled. GRVHulk remains unchanged.'

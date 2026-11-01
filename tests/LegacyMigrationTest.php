@@ -36,6 +36,7 @@ final class LegacyMigrationTest extends TestCase
         $original = "enabled: true\nlogging: true\nwhitelist: |\n  198.51.100.1\n";
         file_put_contents($path, $original);
         $this->assertTrue(LegacyMigration::preview($this->userDir)['can_migrate']);
+        $this->assertFalse(LegacyMigration::preview($this->userDir)['migration_complete']);
         $import = LegacyMigration::migrate($this->userDir, true);
         $this->assertTrue($import['success']);
         $this->assertFalse($import['botwarden_enabled']);
@@ -46,6 +47,8 @@ final class LegacyMigrationTest extends TestCase
         $this->assertNotEmpty(glob($this->userDir . '/data/botwarden/backups/grvhulk-*.yaml'));
         $this->assertFalse(LegacyMigration::preview($this->userDir)['can_migrate']);
         $this->assertFileExists($this->userDir . '/data/botwarden/migration-complete.json');
+        $this->assertTrue(LegacyMigration::preview($this->userDir)['migration_complete']);
+        $this->assertTrue(LegacyMigration::preview($this->userDir)['detected']);
     }
 
     public function testConfirmationRequired(): void
@@ -87,6 +90,7 @@ final class LegacyMigrationTest extends TestCase
             $this->fail('Bad database must not migrate');
         } catch (\Throwable $error) {
             $this->assertStringContainsString('not a database', $error->getMessage());
+            $this->assertFalse(LegacyMigration::preview($this->userDir)['migration_complete']);
             $this->assertFileDoesNotExist($this->userDir . '/config/plugins/botwarden.yaml');
             $this->assertFileDoesNotExist($this->userDir . '/data/botwarden/botwarden.sqlite');
         }
@@ -97,6 +101,7 @@ final class LegacyMigrationTest extends TestCase
         file_put_contents($this->userDir . '/config/plugins/grvhulk.yaml', "enabled: true\n");
         file_put_contents($this->userDir . '/config/plugins/botwarden.yaml', "enabled: false\nmarker: keep\n");
         $this->assertFalse(LegacyMigration::preview($this->userDir)['can_migrate']);
+        $this->assertFalse(LegacyMigration::preview($this->userDir)['migration_complete']);
         $this->expectException(\RuntimeException::class);
         try { LegacyMigration::migrate($this->userDir, true); }
         finally {
