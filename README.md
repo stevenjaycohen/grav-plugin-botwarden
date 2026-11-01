@@ -1,10 +1,10 @@
 # botWarden — security and crawler policy management for Grav 2
 
-**Version 1.2.3** — maintained continuation of GRVHulk 1.1 for Grav 2.
+**Version 1.2.4** — maintained continuation of GRVHulk 1.1 for Grav 2.
 
 botWarden is a maintained fork of [GRVHulk by horiken1216](https://github.com/horiken1216/grav-plugin-grvhulk). Its MIT license and copyright notice remain in [LICENSE](LICENSE). GRVHulk's original architecture itself credits [Ari Cooper-Davis's grav-plugin-ip-blacklist](https://github.com/aricooperdavis/grav-plugin-ip-blacklist).
 
-The fork continues GRVHulk's 1.1 version line as botWarden 1.2.3.
+The fork continues GRVHulk's 1.1 version line as botWarden 1.2.4.
 
 ## Features
 
@@ -71,9 +71,10 @@ This uses the Known Agents API key in `dark_visitors.api_key`. The scheduled upd
 
 1. In Known Agents, open the project for this site, open **Settings**, and copy its project access token.
 2. Save that token in botWarden's **Known Agents Project Access Token** field (`dark_visitors.api_key`). The existing crawler-rule API uses this field too.
-3. Open the botWarden dashboard and click **Connect Known Agents**. This sends one visit to `POST https://api.knownagents.com/visits`, using bearer authentication and a JSON array containing the event. The event records the connection request and includes `metadata.integration_test: true`. Only HTTP **204 No Content** is treated as acceptance. Repeating the action sends another test visit; the button stays disabled while a request is pending.
-4. Check the project's **Realtime** timeline and connection status in Known Agents. An accepted test visit confirms the API accepted that request; botWarden does not independently read or change the project's connection indicator.
-5. Separately enable **Report Visits to Known Agents** if you want ongoing request reporting. It defaults to off, and sending a connection test leaves it off. Crawler blocking and `robots.txt` publishing remain independent.
+3. Enable **Report Visits to Known Agents** and save. This opts the site into traffic reporting and defaults to off. Crawler blocking and `robots.txt` publishing remain independent.
+4. Visit a public page, then check the project's **Realtime** timeline and connection status in Known Agents. The owner confirmed that both projects became Connected after opting into visit reporting. BotWarden does not independently read or change that indicator.
+
+Reports use `POST https://api.knownagents.com/visits` with bearer authentication and a JSON array containing the event. Only HTTP **204 No Content** is treated as event acceptance. Acceptance of a test event alone does not verify the project's connection status.
 
 ```yaml
 dark_visitors:
@@ -98,7 +99,7 @@ plugins/botwarden/README.md
 plugins/botwarden/CHANGELOG.md
 ```
 
-Preserve the site's `config/plugins/botwarden.yaml`; merge any desired `dark_visitors.report_visits` override into it rather than replacing it. From the Grav root, run `php bin/grav cache`, then verify the site's `/` page, the botWarden dashboard at `/admin/plugin/botwarden` (or the site's configured Admin2 route), the one-time connection action, and both states of the reporting toggle in Known Agents Realtime. Local verification for this change passed 238 PHP tests (874 assertions), including HTTP authorization and synthetic provider tests, plus nine JavaScript tests. Local tests use synthetic localhost providers; the real projects' connection indicators and deployed hosting behavior require verification on those sites.
+Preserve the site's `config/plugins/botwarden.yaml`; merge any desired `dark_visitors.report_visits` override into it rather than replacing it. From the Grav root, run `php bin/grav cache`, then verify the site's `/` page, the botWarden dashboard at `/admin/plugin/botwarden` (or the site's configured Admin2 route), and both states of the reporting toggle in Known Agents Realtime. The REST reporting implementation passed 238 PHP tests (874 assertions), including HTTP authorization and synthetic provider tests. The updated dashboard passed all six JavaScript migration tests. Local tests use synthetic localhost providers; the real projects' connection indicators and deployed hosting behavior require verification on those sites.
 
 ### Migrating GRVHulk
 
@@ -131,14 +132,14 @@ php user/plugins/botwarden/cli/unblock.php 203.0.113.7 --whitelist
 The repository's `.gitattributes` excludes tests, CI files and local development notes from Git archives. From a committed checkout with the ignored `vendor/` directory available, create a package without overwriting an existing one:
 
 ```bash
-test ! -e vendor/botwarden-1.2.3.zip && git archive --format=zip --prefix=grav-plugin-botwarden/ --output=vendor/botwarden-1.2.3.zip HEAD
+test ! -e vendor/botwarden-1.2.4.zip && git archive --format=zip --prefix=grav-plugin-botwarden/ --output=vendor/botwarden-1.2.4.zip HEAD
 ```
 
 The tested package contained 22 files, including its license, metadata and MCP manifest, with no plugin `vendor/` directory. Grav's GPM installer installed it into a clean disposable host. On PHP 8.4.27, scheduler registration/execution, public HTTP, API authorization, block/unblock operations, tool discovery and both CLI utilities passed. CI builds and installs this ZIP for its Grav smoke test and runs the migration-dialog JavaScript tests. A semantic-version tag matching `blueprints.yaml` publishes the ZIP as a GitHub release after the unit and clean-install jobs pass. The tagged commit must be on `main`; existing release assets with different contents are not replaced.
 
 ## Release and GPM status
 
-botWarden 1.2.3 continues the abandoned GRVHulk 1.1 plugin. Release ZIPs are published on the repository's [GitHub releases page](https://github.com/stevenjaycohen/grav-plugin-botwarden/releases). GPM catalog registration is separate from publishing a GitHub release. Local sign-off used PHP 8.4; declared compatibility requirements were retained. Confirm provider credentials, migration backups and deployment-specific settings for the installation you maintain.
+botWarden 1.2.4 continues the abandoned GRVHulk 1.1 plugin. Release ZIPs are published on the repository's [GitHub releases page](https://github.com/stevenjaycohen/grav-plugin-botwarden/releases). GPM catalog registration is separate from publishing a GitHub release. Local sign-off used PHP 8.4; declared compatibility requirements were retained. Confirm provider credentials, migration backups and deployment-specific settings for the installation you maintain.
 
 ## Original authors and license
 

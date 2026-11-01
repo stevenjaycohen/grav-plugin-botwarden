@@ -1,3 +1,9 @@
+# 1.2.4
+## 2026-11-01
+
+1. [](#bugfix)
+    * Remove the misleading Known Agents connection button and direct setup through the opt-in Report Visits setting.
+
 # 1.2.3
 ## 2026-11-01
 

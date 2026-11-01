@@ -24,7 +24,6 @@
         <h2>botWarden</h2>
         <p>Application-layer request security and crawler policies. <a id="settings" href="#">Plugin settings</a></p>
         <section><h3>Security statistics</h3><div id="stats">Loading…</div></section>
-        <section><h3>Known Agents connection</h3><p>Save your project's access token in plugin settings, then send one test visit. Regular visit reporting has a separate toggle in settings.</p><button id="connect-known-agents">Connect Known Agents</button></section>
         <section id="legacy-migration" hidden><h3>GRVHulk migration</h3><div id="legacy">Checking…</div><button id="migrate" hidden>Import old settings and data</button></section>
         <section><h3>Local IP blacklist</h3>
           <label>IP <input id="ip" placeholder="203.0.113.7" autocomplete="off"></label>
@@ -37,7 +36,6 @@
       this.shadowRoot.getElementById('settings').href =
         (window.__GRAV_ADMIN_BASE || '/admin') + '/plugins/botwarden';
       this.shadowRoot.getElementById('migrate').addEventListener('click', () => this.migrate());
-      this.shadowRoot.getElementById('connect-known-agents').addEventListener('click', () => this.connectKnownAgents());
       this.shadowRoot.getElementById('block').addEventListener('click', () => this.updateBlock(true));
       this.shadowRoot.getElementById('unblock').addEventListener('click', () => this.updateBlock(false));
       this.shadowRoot.getElementById('prev').addEventListener('click', () => { this.offset = Math.max(0, (this.offset || 0)-50); this.refresh(); });
@@ -77,17 +75,6 @@
     message(text, isError=false) {
       const el=this.shadowRoot.getElementById('message');
       el.textContent=text; el.className=isError?'error':'';
-    }
-    async connectKnownAgents() {
-      const button = this.shadowRoot.getElementById('connect-known-agents');
-      if (button.disabled) return;
-      button.disabled = true;
-      try {
-        const result = await this.api.post('/botwarden/known-agents/connect', {});
-        if (!result.accepted) throw new Error('Test visit was not accepted');
-        this.message('Known Agents accepted the test visit. Check your project’s Realtime timeline and connection status. Regular visit reporting is controlled separately in settings.');
-      } catch (e) { this.message('Known Agents connection failed: ' + e.message, true); }
-      finally { button.disabled = false; }
     }
     async migrate() {
       const ok = await window.__GRAV_DIALOGS?.confirm({

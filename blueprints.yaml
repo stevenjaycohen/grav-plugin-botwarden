@@ -1,7 +1,7 @@
 name: botWarden
 slug: botwarden
 type: plugin
-version: 1.2.3
+version: 1.2.4
 description: "Advanced IP security for Grav 2: local blacklist, AbuseIPDB, CrowdSec CTI/LAPI, AI crawler blocking via Known Agents, CIDR whitelist, URI filtering."
 icon: shield
 author:
@@ -261,18 +261,18 @@ form:
     dark_visitors_section:
       type: section
       title: Known Agents
-      text: "AI crawler blocking, optional visit reporting and project connection — https://www.knownagents.com/"
+      text: "AI crawler blocking and optional visit reporting — https://www.knownagents.com/"
 
     dark_visitors.api_key:
       type: text
       label: Known Agents Project Access Token
       placeholder: your_api_key_here
-      help: "Copy the access token from your Known Agents project's Settings page, save, then use Connect Known Agents on the botWarden dashboard to send a test visit. Crawler rules use this token too."
+      help: "Copy the access token from your Known Agents project's Settings page and save. Enable Report Visits to Known Agents to send traffic to the project, then check its Realtime timeline and connection status. Crawler rules use this token too."
 
     dark_visitors.report_visits:
       type: toggle
       label: Report Visits to Known Agents
-      help: "Opt in to reporting requests after Grav emits the response. Sends paths, methods, selected headers, response status and duration. Credentials, cookies, query strings and request/response bodies are excluded. Independent of crawler blocking and the one-time connection test."
+      help: "Opt in to reporting requests after Grav emits the response. Sends paths, methods, selected headers, response status and duration. Credentials, cookies, query strings and request/response bodies are excluded. Enable this to report traffic to your project; crawler blocking is configured separately."
       default: 0
       options:
         1: PLUGIN_ADMIN.ENABLED

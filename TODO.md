@@ -1,6 +1,6 @@
 # botWarden — Codex + Grav MCP local integration TODO
 
-**Status:** 1.2.3 Known Agents connection and opt-in visit reporting; owner authorized commit and GitHub release publication
+**Status:** 1.2.4 removes the misleading Known Agents connection button; owner authorized commit and publication
 
 **Target branch:** `develop/botwarden-bootstrap`; releases merge to `main`
 **Executor:** Codex, working in this repository and connected to the **local** Grav installation through its existing [MCP Server plugin](https://github.com/sandymac/grav-plugin-mcp-server). **Scope:** Grav 2 + API + Admin2, PHP 8.3/8.4. This is an executable development/test backlog, not a list of already verified features.
@@ -401,3 +401,10 @@ Fix commit and local rerun evidence / follow-up issue:
 - **PASS — local checks:** PHP 8.4.27 / PHPUnit 11.5.57, **238 tests / 874 assertions**, no warnings; **9 JavaScript tests**; PHP lint for all 29 source/test PHP files, JavaScript syntax, YAML and diff checks. The localhost Grav fixture served the exact updated component bytes with HTTP 200 and JavaScript content type; anonymous connection attempts returned HTTP 401.
 - **PASS — isolation and cleanup:** the repository-local Grav fixture at `http://127.0.0.1:8777` used `tests/fixtures/KnownAgentsTransport.php` to route visits exclusively to the synthetic provider at port 8778. All six intended runtime files matched source. Temporary accounts, keys, sessions, security data, configuration and backup files were cleaned. Test servers remain available for this session. No content-repository preview, external provider account, authenticated live site or remote MCP server was accessed.
 - **Release preparation:** manifest and current-version documentation use `1.2.3`, with a dated Grav-format changelog preserving prior releases. Dependencies and compatibility requirements are unchanged. The real projects' connection indicators, deployed hosting behavior and interactive Admin2 rendering remain unverified; fresh remote release CI and published-archive checks are reported separately.
+
+### Remove misleading Known Agents connection button — 2026-11-01
+
+- **Owner observation:** the projects showed Connected only after opting into regular visit reporting. The dashboard button accepted a test event but did not establish that status. The owner requested committing and publishing its removal.
+- **Change:** remove the dashboard connection button and its JavaScript action, update settings help and setup instructions to use Report Visits, and remove the three tests for the removed UI action. Preserve the existing REST reporting behavior, disabled-by-default toggle and API compatibility. Prior release notes remain unchanged.
+- **PASS — local checks:** all six remaining JavaScript tests, component syntax, blueprint YAML and Git diff checks passed. The repository-local Grav server returned HTTP 200 and JavaScript content type for the exact updated component, with the button absent; its public homepage returned HTTP 200. The two affected fixture files matched source. The earlier 238-test PHP result belongs to 1.2.3; PHP implementation is unchanged and was not rerun locally for this UI removal.
+- **Release preparation:** manifest, dated changelog and current-version documentation use 1.2.4. Publication uses the existing tag-triggered GitHub workflow; fresh CI and published ZIP verification are reported separately. No live site or Known Agents project was accessed or changed.
