@@ -6,20 +6,22 @@ const { runInNewContext } = require('node:vm');
 
 const script = readFileSync(join(__dirname, '../admin-next/pages/botwarden.js'), 'utf8');
 
-function pageFor(confirm, post) {
+function pageFor(confirm, post, get) {
   let Page;
   runInNewContext(script, {
     HTMLElement: class {},
-    window: { __GRAV_DIALOGS: { confirm }, __GRAV_API: { post } },
+    window: { __GRAV_DIALOGS: { confirm }, __GRAV_API: { post, get } },
     customElements: { get() {}, define(tag, type) { Page = type; } },
   });
   const page = new Page();
   const button = { disabled: false };
   const message = { textContent: '', className: '' };
-  page.shadowRoot = { getElementById(id) { return id === 'migrate' ? button : message; } };
+  const elements = { migrate: button, message };
+  page.shadowRoot = { getElementById(id) { return elements[id] || (elements[id] = {}); } };
+  const refresh = page.refresh.bind(page);
   let refreshes = 0;
   page.refresh = async () => { refreshes++; };
-  return { page, button, message, refreshes: () => refreshes };
+  return { page, button, message, elements, refresh, refreshes: () => refreshes };
 }
 
 test('cancelling migration sends no request and explains which installation remains unchanged', async () => {
@@ -64,4 +66,51 @@ test('failed migration exposes the error and restores the confirmation button', 
   assert.equal(fixture.message.className, 'error');
   assert.equal(fixture.refreshes(), 0);
   assert.equal(fixture.button.disabled, false);
+});
+
+function dashboardFor(legacy, post) {
+  return pageFor(async () => true, post, async path => {
+    if (path === '/botwarden/legacy') return legacy;
+    if (path === '/botwarden/status') return {
+      local_count: 0, history_count: 0, abuseipdb_bulk_count: 0, dark_visitors_count: 0,
+    };
+    return { entries: [], total: 0 };
+  });
+}
+
+test('completed migration hides the notice even while legacy artifacts remain', async () => {
+  const fixture = dashboardFor({ detected: true, can_migrate: false, migration_complete: true });
+  await fixture.refresh();
+  assert.equal(fixture.elements['legacy-migration'].hidden, true);
+  assert.equal(fixture.button.hidden, true);
+  assert.equal(fixture.message.textContent, '');
+});
+
+test('unfinished migrations keep their import or blocked-source notice visible', async () => {
+  for (const can_migrate of [true, false]) {
+    const fixture = dashboardFor({ detected: true, can_migrate, migration_complete: false });
+    await fixture.refresh();
+    assert.equal(fixture.elements['legacy-migration'].hidden, false);
+    assert.equal(fixture.button.hidden, !can_migrate);
+    assert.match(fixture.elements.legacy.textContent,
+      can_migrate ? /Older GRVHulk configuration/ : /prevent automatic migration/);
+    assert.equal(fixture.message.textContent, '');
+  }
+});
+
+test('successful import hides the notice immediately and on later refreshes', async () => {
+  const legacy = { detected: true, can_migrate: true, migration_complete: false };
+  const fixture = dashboardFor(legacy, async () => {
+    legacy.can_migrate = false;
+    legacy.migration_complete = true;
+    return { backup_id: 'synthetic-backup' };
+  });
+  fixture.page.refresh = fixture.refresh;
+  await fixture.page.refresh();
+  assert.equal(fixture.elements['legacy-migration'].hidden, false);
+  await fixture.page.migrate();
+  assert.equal(fixture.elements['legacy-migration'].hidden, true);
+  assert.match(fixture.message.textContent, /backup synthetic-backup/);
+  await fixture.page.refresh();
+  assert.equal(fixture.elements['legacy-migration'].hidden, true);
 });

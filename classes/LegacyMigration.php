@@ -15,6 +15,7 @@ final class LegacyMigration
     public static function preview(string $userDir): array
     {
         $found = LegacyInstallationDetector::inspect($userDir);
+        $found['migration_complete'] = is_file(rtrim($userDir, '/') . '/data/botwarden/migration-complete.json');
         $found['migratable'] = ($found['config_readable'] || $found['database_readable']);
         $found['new_config_exists'] = is_file(rtrim($userDir, '/') . '/config/plugins/botwarden.yaml');
         $found['new_database_exists'] = is_file(rtrim($userDir, '/') . '/data/botwarden/botwarden.sqlite');

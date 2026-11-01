@@ -1,3 +1,10 @@
+# 1.2.2
+## 2026-11-01
+
+1. [](#bugfix)
+    * Hide the GRVHulk migration notice after a successful import, including on later dashboard visits while legacy files remain.
+    * Keep migration notices visible for unfinished or blocked imports.
+
 # 1.2.1
 ## 2026-10-31
 
