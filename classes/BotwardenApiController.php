@@ -55,6 +55,21 @@ final class BotwardenApiController extends AbstractApiController
         return ApiResponse::create(LegacyMigration::preview($this->userDir()));
     }
 
+    public function connectKnownAgents(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requirePermission($request, 'api.super');
+        $token = trim((string)Grav::instance()['config']->get('plugins.botwarden.dark_visitors.api_key', ''));
+        if ($token === '') {
+            throw new ValidationException('Save your Known Agents project access token in plugin settings first', [
+                ['field' => 'dark_visitors.api_key', 'message' => 'Project access token required'],
+            ]);
+        }
+        $visit = DarkVisitorsClient::visit($request->getServerParams());
+        $visit['metadata'] = ['integration_test' => true];
+        (new DarkVisitorsClient($token))->reportVisit($visit);
+        return ApiResponse::create(['accepted' => true]);
+    }
+
     public function migrateLegacy(ServerRequestInterface $request): ResponseInterface
     {
         $this->requirePermission($request, 'api.super');

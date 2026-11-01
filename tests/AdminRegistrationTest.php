@@ -52,5 +52,6 @@ final class AdminRegistrationTest extends TestCase
         $this->assertContains('/botwarden/legacy', $paths);
         $this->assertContains('/botwarden/migrate', $paths);
         $this->assertContains('/botwarden/unblock', $paths);
+        $this->assertContains('/botwarden/known-agents/connect', $paths);
     }
 }

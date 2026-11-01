@@ -194,16 +194,118 @@ final class ServiceIntegrationTest extends TestCase
             file(self::$work . '/requests.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
     }
 
-    private static function http(string $path, string $ip = '8.8.8.8', string $agent = 'FixtureBrowser'): array
+    private static function http(string $path, string $ip = '8.8.8.8', string $agent = 'FixtureBrowser', array $headers = [], string $method = 'GET', ?string $requestBody = null): array
     {
         $handle = curl_init('http://127.0.0.1:8777' . $path);
-        curl_setopt_array($handle, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15,
-            CURLOPT_HTTPHEADER => ['X-Forwarded-For: ' . $ip], CURLOPT_USERAGENT => $agent]);
+        $options = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15,
+            CURLOPT_HTTPHEADER => array_merge(['X-Forwarded-For: ' . $ip], $headers),
+            CURLOPT_USERAGENT => $agent, CURLOPT_CUSTOMREQUEST => $method];
+        if ($requestBody !== null) $options[CURLOPT_POSTFIELDS] = $requestBody;
+        curl_setopt_array($handle, $options);
         $body = curl_exec($handle);
         if ($body === false) throw new \RuntimeException('Local Grav request failed: ' . curl_error($handle));
         $result = ['status' => curl_getinfo($handle, CURLINFO_RESPONSE_CODE), 'type' => curl_getinfo($handle, CURLINFO_CONTENT_TYPE), 'body' => $body];
         curl_close($handle);
         return $result;
+    }
+
+    private function waitForVisits(int $count): array
+    {
+        $deadline = microtime(true) + 4;
+        do {
+            $requests = array_values(array_filter($this->requests(), static fn($request) => $request['service'] === 'visits'));
+            if (count($requests) >= $count) return $requests;
+            usleep(10000);
+        } while (microtime(true) < $deadline);
+        return $requests;
+    }
+
+    public function testKnownAgentsVisitUsesBearerTokenJsonBatchAnd204Acceptance(): void
+    {
+        $this->assertTrue(self::helper(['operation' => 'visit'])['accepted']);
+        $requests = $this->requests();
+        $this->assertCount(1, $requests);
+        $this->assertSame('POST', $requests[0]['method']);
+        $this->assertSame('application/json', $requests[0]['content_type']);
+        $this->assertTrue($requests[0]['project_token_matches']);
+        $visit = json_decode($requests[0]['body'], true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('/fixture-visit', $visit[0]['request_path']);
+        $this->assertStringNotContainsString('private', $requests[0]['body']);
+    }
+
+    public static function visitFailures(): iterable
+    {
+        yield ['unauthorized', 401];
+        yield ['server_error', 503];
+        yield ['malformed', 200];
+    }
+
+    #[DataProvider('visitFailures')]
+    public function testKnownAgentsRejectsVisitResponsesOtherThan204(string $scenario, int $status): void
+    {
+        try {
+            self::helper(['operation' => 'visit', 'scenario' => $scenario]);
+            $this->fail('Unaccepted visit must not report success');
+        } catch (\RuntimeException $error) {
+            $this->assertStringContainsString('Known Agents visits HTTP ' . $status, $error->getMessage());
+        }
+    }
+
+    public function testKnownAgentsReportingRequiresItsOwnToggleAndToken(): void
+    {
+        foreach ([['api_key' => 'synthetic-fixture-key', 'report_visits' => false],
+            ['api_key' => null, 'report_visits' => true]] as $config) {
+            $this->configure(['dark_visitors' => $config]);
+            $this->assertSame(200, self::http('/')['status']);
+            $this->assertSame([], $this->requests());
+        }
+        $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
+        $response = self::http('/?token=private', '198.51.100.8', 'FixtureBrowser',
+            ['Authorization: Bearer private', 'Cookie: private=private', 'X-API-Key: private',
+                'Referer: https://example.invalid/page?token=private']);
+        $this->assertSame(200, $response['status']);
+        $requests = $this->waitForVisits(1);
+        $this->assertCount(1, $requests);
+        $visit = json_decode($requests[0]['body'], true, 512, JSON_THROW_ON_ERROR)[0];
+        $this->assertSame('/', $visit['request_path']);
+        $this->assertSame('FixtureBrowser', $visit['request_headers']['user-agent']);
+        $this->assertSame('198.51.100.8', $visit['request_headers']['x-forwarded-for']);
+        $this->assertSame(200, $visit['response_status_code']);
+        $this->assertStringContainsString('text/html', $visit['response_headers']['content-type']);
+        $this->assertGreaterThanOrEqual(0, $visit['response_duration_in_milliseconds']);
+        $this->assertStringNotContainsString('private', $requests[0]['body']);
+        $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => false]]);
+        $this->assertSame(200, self::http('/')['status']);
+        $this->assertCount(1, $this->requests());
+    }
+
+    public function testKnownAgentsTracksApiRequestsAndProtocolHeadersWithoutBodies(): void
+    {
+        $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
+        $response = self::http('/api/v1/ping', '198.51.100.8', 'FixtureAgent', [
+            'MCP-Protocol-Version: 2025-06-18', 'API-Version: 2026-01-30', 'UCP-Agent: FixtureCommerce',
+            'Content-Type: application/json',
+        ], 'POST', '{"private":"must-not-be-reported"}');
+        $requests = $this->waitForVisits(1);
+        $this->assertCount(1, $requests);
+        $visit = json_decode($requests[0]['body'], true, 512, JSON_THROW_ON_ERROR)[0];
+        $this->assertSame('/api/v1/ping', $visit['request_path']);
+        $this->assertSame('POST', $visit['request_method']);
+        $this->assertSame($response['status'], $visit['response_status_code']);
+        $this->assertSame('2025-06-18', $visit['request_headers']['mcp-protocol-version']);
+        $this->assertSame('2026-01-30', $visit['request_headers']['api-version']);
+        $this->assertSame('FixtureCommerce', $visit['request_headers']['ucp-agent']);
+        $this->assertStringNotContainsString('must-not-be-reported', $requests[0]['body']);
+    }
+
+    public function testKnownAgentsReportingFailureLeavesThePageResponseUnchanged(): void
+    {
+        $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
+        $response = self::http('/', '198.51.100.8', 'FixtureBrowser', ['X-Botwarden-Visit-Scenario: server_error']);
+        $this->assertSame(200, $response['status']);
+        $this->assertStringContainsString('Synthetic botWarden migration test site.', $response['body']);
+        $this->assertStringNotContainsString('HTTP 503', $response['body']);
+        $this->assertCount(1, $this->waitForVisits(1));
     }
 
     public function testDefaultAndEnabledSchedulerJobs(): void

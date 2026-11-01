@@ -71,6 +71,7 @@ final class ApiAuthorizationTest extends TestCase
             ['POST', '/botwarden/blocks', ['ip' => '198.51.100.200', 'reason' => 'Authorization fixture']],
             ['POST', '/botwarden/unblock', ['ip' => '198.51.100.200']],
             ['POST', '/botwarden/migrate', ['confirm' => true]],
+            ['POST', '/botwarden/known-agents/connect', []],
         ];
     }
 
@@ -228,6 +229,45 @@ final class ApiAuthorizationTest extends TestCase
         $this->assertSame(401, $response['status']);
     }
 
+    public function testKnownAgentsConnectionSendsOneVisitWithRegularReportingDisabled(): void
+    {
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = is_file($path) ? fileperms($path) & 0777 : null;
+        $mtime = is_file($path) ? filemtime($path) : null;
+        $work = dirname(self::$work) . '/services';
+        $this->assertDirectoryDoesNotExist($work);
+        mkdir($work, 0700);
+        try {
+            $config = $original === null ? [] : \Symfony\Component\Yaml\Yaml::parse($original);
+            $config['dark_visitors']['api_key'] = 'synthetic-fixture-key';
+            $config['dark_visitors']['report_visits'] = false;
+            file_put_contents($path, json_encode($config, JSON_THROW_ON_ERROR));
+            self::helper('clear_cache');
+            $response = self::request('POST', '/api/v1/botwarden/known-agents/connect', [], self::headers('explicit_super'));
+            $this->assertSame(200, $response['status']);
+            $this->assertTrue($response['json']['data']['accepted']);
+            $requests = file($work . '/requests.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $this->assertCount(1, $requests);
+            $request = json_decode($requests[0], true, 512, JSON_THROW_ON_ERROR);
+            $this->assertSame('visits', $request['service']);
+            $this->assertTrue($request['project_token_matches']);
+            $visits = json_decode($request['body'], true, 512, JSON_THROW_ON_ERROR);
+            $this->assertCount(1, $visits);
+            $this->assertTrue($visits[0]['metadata']['integration_test']);
+            $this->assertArrayNotHasKey('x-api-key', $visits[0]['request_headers']);
+            $response = self::request('POST', '/api/v1/botwarden/known-agents/connect', [],
+                self::headers('explicit_super') + ['X-botwarden-visit-scenario' => 'unauthorized']);
+            $this->assertSame(500, $response['status']);
+        } finally {
+            if ($original === null) unlink($path);
+            else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
+            self::helper('clear_cache');
+            if (is_file($work . '/requests.jsonl')) unlink($work . '/requests.jsonl');
+            rmdir($work);
+        }
+    }
+
     private function exerciseAuthorized(array $headers): void
     {
         foreach (array_slice(self::routes(), 0, 4) as [$method, $path]) {
@@ -239,6 +279,8 @@ final class ApiAuthorizationTest extends TestCase
         $this->assertSame(200, $response['status']);
         $response = self::request('POST', '/api/v1/botwarden/migrate', ['confirm' => false], $headers);
         $this->assertSame(422, $response['status'], 'Authorized requests still need explicit migration confirmation');
+        $response = self::request('POST', '/api/v1/botwarden/known-agents/connect', [], $headers);
+        $this->assertSame(422, $response['status'], 'Connection requires a configured project token');
     }
 
     private static function headers(string $credential): array

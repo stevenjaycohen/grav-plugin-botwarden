@@ -67,6 +67,39 @@ robots_txt:
 
 This uses the Known Agents API key in `dark_visitors.api_key`. The scheduled update writes botWarden's marked section in the Grav root `robots.txt`, appending it when absent and preserving all existing bytes outside it, including separate Known Hosts rules. Each marker must occupy its own complete line; missing, duplicate, reversed or embedded markers cause publication to fail without changing the file. Changed files receive a timestamped backup in `user/data/botwarden/backups`; unchanged runs do not rewrite the file or create another backup. Existing file permissions are retained, backups use mode `0600`, and newly created public files use `0644`. Publishing rules and enabling User-Agent enforcement remain separate settings.
 
+### Known Agents connection and visit reporting
+
+1. In Known Agents, open the project for this site, open **Settings**, and copy its project access token.
+2. Save that token in botWarden's **Known Agents Project Access Token** field (`dark_visitors.api_key`). The existing crawler-rule API uses this field too.
+3. Open the botWarden dashboard and click **Connect Known Agents**. This sends one visit to `POST https://api.knownagents.com/visits`, using bearer authentication and a JSON array containing the event. The event records the connection request and includes `metadata.integration_test: true`. Only HTTP **204 No Content** is treated as acceptance. Repeating the action sends another test visit; the button stays disabled while a request is pending.
+4. Check the project's **Realtime** timeline and connection status in Known Agents. An accepted test visit confirms the API accepted that request; botWarden does not independently read or change the project's connection indicator.
+5. Separately enable **Report Visits to Known Agents** if you want ongoing request reporting. It defaults to off, and sending a connection test leaves it off. Crawler blocking and `robots.txt` publishing remain independent.
+
+```yaml
+dark_visitors:
+  api_key: YOUR_PROJECT_ACCESS_TOKEN
+  report_visits: false
+```
+
+Regular reporting runs in Grav's `onShutdown` hook after response output and session closure. It posts one event for each request handled by Grav, including API requests, with a three-second transport timeout. Reporting failures are logged without replacing the page response. There is no persistent queue or automatic retry; early HTTP connection completion depends on the host's response-flushing support.
+
+Events include the path without its query string, HTTP method, selected headers, response status, available content type and elapsed milliseconds. The header allowlist includes User-Agent, Host, Referer without credentials/query/fragment, IP forwarding headers, `mcp-protocol-version`, `api-version` and `ucp-agent`. Authorization, cookies, API keys, other arbitrary headers, request bodies and response bodies are excluded. Optional MCP payload fields and ACP/UCP response bodies are not collected.
+
+For a manual update, replace these files relative to the live `/user/` directory:
+
+```text
+plugins/botwarden/botwarden.php
+plugins/botwarden/botwarden.yaml
+plugins/botwarden/blueprints.yaml
+plugins/botwarden/classes/DarkVisitorsClient.php
+plugins/botwarden/classes/BotwardenApiController.php
+plugins/botwarden/admin-next/pages/botwarden.js
+plugins/botwarden/README.md
+plugins/botwarden/CHANGELOG.md
+```
+
+Preserve the site's `config/plugins/botwarden.yaml`; merge any desired `dark_visitors.report_visits` override into it rather than replacing it. From the Grav root, run `php bin/grav cache`, then verify the site's `/` page, the botWarden dashboard at `/admin/plugin/botwarden` (or the site's configured Admin2 route), the one-time connection action, and both states of the reporting toggle in Known Agents Realtime. Local verification for this change passed 238 PHP tests (874 assertions), including HTTP authorization and synthetic provider tests, plus nine JavaScript tests. Local tests use synthetic localhost providers; the real projects' connection indicators and deployed hosting behavior require verification on those sites.
+
 ### Migrating GRVHulk
 
 The plugin detects old installation artifacts:

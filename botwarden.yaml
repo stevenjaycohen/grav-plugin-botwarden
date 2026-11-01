@@ -40,6 +40,7 @@ crowdsec:
 # Known Agents / Dark Visitors (https://www.knownagents.com/)
 dark_visitors:
   api_key: ~
+  report_visits: false
   agent_types:
     - 'AI Assistant'
     - 'AI Data Scraper'

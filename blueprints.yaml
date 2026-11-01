@@ -260,14 +260,25 @@ form:
     # ------------------------------------------------------------------
     dark_visitors_section:
       type: section
-      title: Known Agents (AI Crawler Blocking)
-      text: "Blocks AI crawlers by User-Agent string. Data provided by Known Agents (formerly Dark Visitors) — https://www.knownagents.com/"
+      title: Known Agents
+      text: "AI crawler blocking, optional visit reporting and project connection — https://www.knownagents.com/"
 
     dark_visitors.api_key:
       type: text
-      label: Known Agents API Key
+      label: Known Agents Project Access Token
       placeholder: your_api_key_here
-      help: "Sign up at https://www.knownagents.com/ to get an API key. The UA list is updated daily via the Grav scheduler."
+      help: "Copy the access token from your Known Agents project's Settings page, save, then use Connect Known Agents on the botWarden dashboard to send a test visit. Crawler rules use this token too."
+
+    dark_visitors.report_visits:
+      type: toggle
+      label: Report Visits to Known Agents
+      help: "Opt in to reporting requests after Grav emits the response. Sends paths, methods, selected headers, response status and duration. Credentials, cookies, query strings and request/response bodies are excluded. Independent of crawler blocking and the one-time connection test."
+      default: 0
+      options:
+        1: PLUGIN_ADMIN.ENABLED
+        0: PLUGIN_ADMIN.DISABLED
+      validate:
+        type: bool
 
     dark_visitors.agent_types:
       type: checkboxes

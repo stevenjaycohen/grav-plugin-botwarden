@@ -63,9 +63,32 @@ class BotwardenPlugin extends Plugin
         $this->enable([
             'onRequestHandlerInit' => ['onRequestHandlerInit', 1000],
             'onSchedulerInitialized' => ['onSchedulerInitialized', 0],
+            'onShutdown' => ['onKnownAgentsShutdown', 0],
         ]);
 
 
+    }
+
+    /** Grav runs this hook after emitting the response and closing the session. */
+    public function onKnownAgentsShutdown(): void
+    {
+        $config = $this->config();
+        if (PHP_SAPI === 'cli' || empty($config['dark_visitors']['report_visits'])
+            || empty($config['dark_visitors']['api_key'])) {
+            return;
+        }
+        // The explicit connection action already sends its own test visit.
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+        if (str_ends_with($path, '/botwarden/known-agents/connect')) return;
+        try {
+            $started = (float)($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
+            $visit = DarkVisitorsClient::visit($_SERVER, headers_list(), http_response_code() ?: 200,
+                (microtime(true) - $started) * 1000);
+            (new DarkVisitorsClient(trim((string)$config['dark_visitors']['api_key'])))->reportVisit($visit);
+        } catch (\Throwable $error) {
+            // Reporting failures must never change the visitor's response.
+            $this->grav['log']->warning('[botWarden] Known Agents visit reporting failed: ' . $error->getMessage());
+        }
     }
 
     /**
@@ -335,6 +358,7 @@ class BotwardenPlugin extends Plugin
         $routes->get('/botwarden/status', [$controller, 'status']);
         $routes->get('/botwarden/legacy', [$controller, 'legacy']);
         $routes->post('/botwarden/migrate', [$controller, 'migrateLegacy']);
+        $routes->post('/botwarden/known-agents/connect', [$controller, 'connectKnownAgents']);
         $routes->get('/botwarden/blocks', [$controller, 'blocks']);
         $routes->get('/botwarden/history', [$controller, 'history']);
         $routes->post('/botwarden/blocks', [$controller, 'addBlock']);

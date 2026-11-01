@@ -141,6 +141,10 @@ if ($operation === 'cleanup') {
 $user = $accounts->load($names['super']);
 if (!$user->exists()) throw new RuntimeException('Fixture superuser is missing');
 switch ($operation) {
+    case 'clear_cache':
+        Grav\Common\Cache::clearCache('cache-only');
+        echo "Disposable fixture cache cleared.\n";
+        exit;
     case 'revoke_super': $user->set('access.api.super', false); break;
     case 'restore_super': $user->set('access.api.super', true); break;
     case 'disable_super': $user->set('state', 'disabled'); break;

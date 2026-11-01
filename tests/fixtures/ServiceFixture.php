@@ -10,7 +10,7 @@ namespace Grav\Plugin\Botwarden {
         $service = match ($host) {
             'api.abuseipdb.com' => str_contains((string)$url, '/report') ? 'report' : 'bulk',
             'cti.api.crowdsec.net' => 'cti',
-            'api.knownagents.com' => 'agents',
+            'api.knownagents.com' => parse_url((string)$url, PHP_URL_PATH) === '/visits' ? 'visits' : 'agents',
             '127.0.0.1' => 'lapi',
             default => throw new \RuntimeException('Unexpected provider in disposable test'),
         };
@@ -31,7 +31,7 @@ namespace {
     if (PHP_SAPI === 'cli-server') {
         header('Content-Type: application/json');
         $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-        if (!preg_match('~^/mock/(bulk|agents|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found)(?:/v1/decisions)?$~', $path, $match)) {
+        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found)(?:/v1/decisions)?$~', $path, $match)) {
             http_response_code(404);
             echo '{}';
             return;
@@ -41,6 +41,8 @@ namespace {
         file_put_contents($work . '/requests.jsonl', json_encode([
             'service' => $service, 'scenario' => $scenario,
             'method' => $_SERVER['REQUEST_METHOD'], 'body' => $body,
+            'content_type' => $_SERVER['CONTENT_TYPE'] ?? '',
+            'project_token_matches' => ($_SERVER['HTTP_AUTHORIZATION'] ?? '') === 'Bearer synthetic-fixture-key',
         ], JSON_THROW_ON_ERROR) . "\n", FILE_APPEND | LOCK_EX);
         if (in_array($scenario, ['unauthorized', 'server_error', 'rate_limit', 'not_found'], true)) {
             http_response_code(['unauthorized' => 401, 'server_error' => 503, 'rate_limit' => 429, 'not_found' => 404][$scenario]);
@@ -49,6 +51,18 @@ namespace {
         }
         if ($scenario === 'empty') { echo ''; return; }
         if ($scenario === 'malformed') { echo '<html>synthetic upstream error</html>'; return; }
+        if ($service === 'visits') {
+            $visits = json_decode($body, true);
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST' || ($_SERVER['CONTENT_TYPE'] ?? '') !== 'application/json'
+                || ($_SERVER['HTTP_AUTHORIZATION'] ?? '') !== 'Bearer synthetic-fixture-key'
+                || !is_array($visits) || !array_is_list($visits) || count($visits) !== 1
+                || !isset($visits[0]['request_path'], $visits[0]['request_method'], $visits[0]['request_headers'])) {
+                http_response_code(400);
+                return;
+            }
+            http_response_code(204);
+            return;
+        }
         echo match ($service) {
             'bulk' => "198.51.100.10\n198.51.100.11\n198.51.100.10\n2001:db8::1\n",
             'agents' => "User-agent: FixtureBot\nDisallow: /\nUser-agent: FixtureCrawler\nDisallow: /\n",
@@ -111,6 +125,13 @@ namespace {
             }
         })();
         $result = ['count' => Grav\Plugin\Botwarden\BotwardenDatabase::replaceBulkList($db, $ips)];
+    } elseif ($operation === 'visit') {
+        $client = new Grav\Plugin\Botwarden\DarkVisitorsClient('synthetic-fixture-key');
+        $client->reportVisit(Grav\Plugin\Botwarden\DarkVisitorsClient::visit([
+            'REQUEST_URI' => '/fixture-visit?token=private', 'REQUEST_METHOD' => 'GET',
+            'HTTP_USER_AGENT' => 'FixtureAgent',
+        ]));
+        $result = ['accepted' => true];
     } elseif ($operation === 'cti' || $operation === 'lapi') {
         $db = Grav\Plugin\Botwarden\BotwardenDatabase::getInstance($host . '/user/data/botwarden');
         $client = new Grav\Plugin\Botwarden\CrowdSecClient($config['crowdsec'], $db);

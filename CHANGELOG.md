@@ -1,3 +1,10 @@
+# Unreleased
+
+1. [](#new)
+    * Connect a Known Agents project with a one-time REST API test visit from the botWarden dashboard.
+    * Add a separate, disabled-by-default toggle for ongoing visit reporting after Grav emits the response.
+    * Filter visit metadata to exclude credentials, cookies, query strings and request/response bodies; preserve MCP and commerce protocol headers.
+
 # 1.2.2
 ## 2026-11-01
 
