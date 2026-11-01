@@ -1,6 +1,6 @@
 # botWarden — Codex + Grav MCP local integration TODO
 
-**Status:** 1.2.1 documentation release and GPM submission authorized after two-site owner sign-off
+**Status:** 1.2.2 migration-notice patch; owner authorized release, merge and push
 
 **Target branch:** `develop/botwarden-bootstrap`; releases merge to `main`
 **Executor:** Codex, working in this repository and connected to the **local** Grav installation through its existing [MCP Server plugin](https://github.com/sandymac/grav-plugin-mcp-server). **Scope:** Grav 2 + API + Admin2, PHP 8.3/8.4. This is an executable development/test backlog, not a list of already verified features.
@@ -386,3 +386,10 @@ Fix commit and local rerun evidence / follow-up issue:
 - Applied the required version/date/category structure from https://learn.getgrav.org/2/plugins/gpm-submission#changelog-format . Every original 1.2.0 release-note bullet is preserved under its original version. Local test instances, credentials and detailed sign-off reports remain ignored.
 - An initial search of `getgrav/grav` issues found no existing botWarden submission. Registration will request the distinct `botwarden` slug, with upstream attribution retained. Publication and submission results will be reported after CI and archive verification.
 - **Local validation:** both changelog versions match Grav's version/date/category syntax, all 19 original release-note bullets and the MIT attribution are preserved, and the manifest parses with `version` as its sole changed metadata field. The working diff contains only `CHANGELOG.md`, `README.md`, `TODO.md` and `blueprints.yaml`; no application code, dependency, default configuration or workflow changed. Diff checks passed.
+
+### Migration notice patch release — 2026-11-01
+
+- **Owner authorization:** commit the migration-notice change, make a new release, then merge and push. Scope remains this repository; no live-site deployment or content-repository preview changes are authorized.
+- **Implementation:** `e23ad70` exposes the existing completion marker in migration previews and hides the Admin2 migration section after completion, even when original GRVHulk files remain. Unfinished and blocked imports retain their notices. Regression tests cover completion, failures and later refreshes.
+- **PASS — local unit checks:** PHP 8.4.27 / PHPUnit 11.5.57, **102 tests / 295 assertions**, no warnings; all **6 JavaScript migration tests** passed. Temporary PHPUnit fixtures stayed inside this repository and were removed by test teardown.
+- **Release preparation:** manifest and current-version documentation use `1.2.2`; dated Grav-format changelog retains prior versions unchanged. Compatibility requirements, dependencies and configuration defaults are unchanged. Fresh localhost verification passed all **215 PHP tests / 766 assertions**, including HTTP authorization and synthetic service integration, with no warnings. PHP lint passed all 28 tracked PHP files; JavaScript syntax, manifest YAML and diff checks passed. Package and remote CI/publication results must be verified separately; prior-release evidence above is historical.
