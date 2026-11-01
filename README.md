@@ -1,10 +1,10 @@
 # botWarden — security and crawler policy management for Grav 2
 
-**Version 1.2.2** — maintained continuation of GRVHulk 1.1 for Grav 2.
+**Version 1.2.3** — maintained continuation of GRVHulk 1.1 for Grav 2.
 
 botWarden is a maintained fork of [GRVHulk by horiken1216](https://github.com/horiken1216/grav-plugin-grvhulk). Its MIT license and copyright notice remain in [LICENSE](LICENSE). GRVHulk's original architecture itself credits [Ari Cooper-Davis's grav-plugin-ip-blacklist](https://github.com/aricooperdavis/grav-plugin-ip-blacklist).
 
-The fork continues GRVHulk's 1.1 version line as botWarden 1.2.2.
+The fork continues GRVHulk's 1.1 version line as botWarden 1.2.3.
 
 ## Features
 
@@ -131,14 +131,14 @@ php user/plugins/botwarden/cli/unblock.php 203.0.113.7 --whitelist
 The repository's `.gitattributes` excludes tests, CI files and local development notes from Git archives. From a committed checkout with the ignored `vendor/` directory available, create a package without overwriting an existing one:
 
 ```bash
-test ! -e vendor/botwarden-1.2.2.zip && git archive --format=zip --prefix=grav-plugin-botwarden/ --output=vendor/botwarden-1.2.2.zip HEAD
+test ! -e vendor/botwarden-1.2.3.zip && git archive --format=zip --prefix=grav-plugin-botwarden/ --output=vendor/botwarden-1.2.3.zip HEAD
 ```
 
 The tested package contained 22 files, including its license, metadata and MCP manifest, with no plugin `vendor/` directory. Grav's GPM installer installed it into a clean disposable host. On PHP 8.4.27, scheduler registration/execution, public HTTP, API authorization, block/unblock operations, tool discovery and both CLI utilities passed. CI builds and installs this ZIP for its Grav smoke test and runs the migration-dialog JavaScript tests. A semantic-version tag matching `blueprints.yaml` publishes the ZIP as a GitHub release after the unit and clean-install jobs pass. The tagged commit must be on `main`; existing release assets with different contents are not replaced.
 
 ## Release and GPM status
 
-botWarden 1.2.2 continues the abandoned GRVHulk 1.1 plugin. Release ZIPs are published on the repository's [GitHub releases page](https://github.com/stevenjaycohen/grav-plugin-botwarden/releases). GPM catalog registration is separate from publishing a GitHub release. Local sign-off used PHP 8.4; declared compatibility requirements were retained. Confirm provider credentials, migration backups and deployment-specific settings for the installation you maintain.
+botWarden 1.2.3 continues the abandoned GRVHulk 1.1 plugin. Release ZIPs are published on the repository's [GitHub releases page](https://github.com/stevenjaycohen/grav-plugin-botwarden/releases). GPM catalog registration is separate from publishing a GitHub release. Local sign-off used PHP 8.4; declared compatibility requirements were retained. Confirm provider credentials, migration backups and deployment-specific settings for the installation you maintain.
 
 ## Original authors and license
 

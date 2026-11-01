@@ -1,4 +1,5 @@
-# Unreleased
+# 1.2.3
+## 2026-11-01
 
 1. [](#new)
     * Connect a Known Agents project with a one-time REST API test visit from the botWarden dashboard.
