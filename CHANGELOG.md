@@ -1,3 +1,18 @@
+# 1.2.5
+## 2026-11-01
+
+1. [](#bugfix)
+    * Reject URI-filter probes without automatically banning or reporting shared proxies when visitor attribution is untrusted or unresolved, including equivalent IPv6 addresses.
+    * Suppress automatic bans and AbuseIPDB reports for cross-site, same-site and unrecognized Fetch Metadata requests while retaining request rejection and existing blocks.
+    * Honor configured Admin2 and versioned API routes for blocking and visit-reporting exemptions, including subdirectory installations, while retaining endpoint authentication.
+    * Prune expired local entries and cached decisions through the registered history-maintenance job even when optional automatic cleanup is disabled.
+    * Remove the remaining Known Agents connection endpoint, mask API-key inputs, format dashboard timestamps in local time and navigate to settings through Admin2.
+    * Guard CLI tools against web execution, remove redundant autoloading and align the outbound User-Agent with the plugin version.
+
+2. [](#new)
+    * Add an opt-in Cloudflare IPv4/IPv6 trusted-proxy preset and conditional dashboard setup warnings.
+    * Add real-browser Fetch Metadata regressions, mounted-route authorization checks and a 512-visitor CTI quota/cache-expiration regression.
+
 # 1.2.4
 ## 2026-11-01
 

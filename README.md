@@ -1,6 +1,6 @@
 # botWarden — security and crawler policy management for Grav 2
 
-**Version 1.2.4** — maintained continuation of GRVHulk 1.1 for Grav 2.
+**Version 1.2.5** — maintained continuation of GRVHulk 1.1 for Grav 2.
 
 botWarden helps you block unwanted IP addresses, filter abusive requests and manage crawler access on your Grav site. Manage local blocks from Admin2 and optionally connect AbuseIPDB, CrowdSec or Known Agents.
 
@@ -56,9 +56,19 @@ Use **Plugin settings** in the dashboard, or merge overrides into `user/config/p
 - Use the dashboard's **Local IP blacklist** to block an address with a reason or remove a local block. The dashboard also shows security statistics and block history.
 - Add IP addresses or CIDR ranges to **Whitelisted IPs / CIDRs** to exempt them from blocking. Enter one per line.
 - If your site uses a reverse proxy or CDN, configure **Trusted Proxies** with its IP addresses or CIDR ranges. Forwarded client-IP headers are used only when the direct connection is from a trusted proxy; otherwise botWarden uses the direct connection's address.
+- For a Cloudflare-fronted site, explicitly select **Trusted Proxy Preset → Cloudflare (IPv4 and IPv6)**. The preset adds Cloudflare's published ranges to any custom **Trusted Proxies** entries; **None** is the default. It uses bundled ranges verified on 2026-11-01 against Cloudflare's [IPv4 list](https://www.cloudflare.com/ips-v4/) and [IPv6 list](https://www.cloudflare.com/ips-v6/), without request-time downloads. Review the published lists when updating the plugin.
+- The dashboard shows a conditional setup warning when no effective trusted proxies are configured, or a warning when its current request carries forwarding headers from an untrusted peer. The warning does not automatically trust headers or change settings.
 - Enable **URI Filtering** to match requests against the configured regular expressions. Review the patterns for your site first. Matching requests add the client IP to the local blacklist; **Enable Blacklisting** controls whether they are rejected.
 
+When a request carries `CF-Connecting-IP`, `X-Forwarded-For` or `X-Real-IP` from a peer outside **Trusted Proxies**, a URI-filter match does not create a local block or queue an AbuseIPDB report. **Enable Blacklisting** still controls rejection of that request. Configure trusted proxies to identify visitors correctly behind a CDN or reverse proxy.
+
+Automatic insertion and reporting are also skipped when the detected address is still the connecting trusted proxy. This covers missing or unusable visitor headers and forwarded chains containing only trusted proxies, so the shared peer is not banned or reported as a visitor. Equivalent IPv6 spellings are treated as the same address. Ensure your proxy supplies a usable visitor address; the matching request is still rejected when **Enable Blacklisting** is enabled, and existing manual blocks remain enforced.
+
+URI-filter matches also create no local block or AbuseIPDB report when `Sec-Fetch-Site` is `cross-site`, `same-site` or any unrecognized value. Automatic insertion and reporting require the header to be absent, `none` or `same-origin`, as well as the proxy check above. This protects readers of cross-site embeds or links when their browsers send that metadata; the matching request is still rejected when **Enable Blacklisting** is enabled. [Fetch Metadata](https://www.w3.org/TR/fetch-metadata/#sec-fetch-site-header) defines these origin relationships; this header is a safeguard, not proof that a client is trustworthy.
+
 Manual dashboard blocks are permanent until removed. Automatically added local entries expire after 24 hours by default (`local_ttl: 86400`); set `local_ttl: 0` for no automatic expiry. Removing a local block does not override another enabled source that still blocks the address.
+
+botWarden exempts Admin2 and the versioned API from request blocking, using `plugins.admin2.route`, `plugins.api.route` and `plugins.api.version_prefix`. These are complete path-prefix matches: `/admin` does not exempt `/administrator`, and `/api/v1` does not exempt `/api/v10`. Changing the configured routes moves the exemptions; the old defaults are not additional exemptions. Blocked IPs can still reach the configured Admin2 login and API authentication endpoints. Those endpoints retain their own authentication and permission checks; the exemption does not grant access to protected operations.
 
 ### Optional threat sources
 
@@ -81,7 +91,9 @@ robots_txt:
 
 This uses the Known Agents project access token in `dark_visitors.api_key` and requires PHP write access to the Grav root `robots.txt` and its directory. The scheduled update writes between `# botWarden:START` and `# botWarden:END`, appending the section when absent and preserving content outside it, including separate Known Hosts rules. Existing files are backed up before changes in `user/data/botwarden/backups/`. Invalid or duplicate markers stop publication without changing the file. Publishing rules and enabling User-Agent blocking are separate settings.
 
-### Known Agents connection and visit reporting
+### Known Agents visit reporting
+
+The former one-time connection action has been removed. Project setup uses the opt-in **Report Visits** setting and actual public-site traffic:
 
 1. In Known Agents, open the project for this site, open **Settings**, and copy its project access token.
 2. Save that token in botWarden's **Known Agents Project Access Token** field (`dark_visitors.api_key`). The existing crawler-rule API uses this field too.
@@ -94,7 +106,7 @@ dark_visitors:
   report_visits: true
 ```
 
-Reporting sends request metadata to Known Agents after Grav emits the response, including for API requests. Reports have a three-second timeout; failures are logged without replacing the page response and are not queued for retry.
+Automatic visit reporting sends public-site request metadata to Known Agents after Grav emits the response. It excludes the configured Admin2 and versioned API routes, including login and API authentication requests, using the same path-prefix check as the blocker. Reports have a three-second timeout; failures are logged without replacing the page response and are not queued for retry.
 
 Events include the path without its query string, HTTP method, selected headers (including User-Agent and client-IP information), response status, available content type and elapsed time. Authorization headers, cookies, API keys, request bodies and response bodies are excluded. Referer URLs have credentials, query strings and fragments removed.
 
@@ -104,13 +116,15 @@ Configure Grav's scheduler to run regularly through your hosting environment. En
 
 | Job | Schedule | Required setting |
 | --- | --- | --- |
-| Local blacklist cleanup | Daily at 02:35 | `auto_clean` |
+| Local blacklist trimming and database vacuum | Daily at 02:35 | `auto_clean` |
 | AbuseIPDB bulk refresh | Daily at 02:45 | `auto_cache`, AbuseIPDB bulk source and API key |
 | Known Agents crawler refresh / robots.txt publication | Daily at 03:00 | Known Agents source or robots.txt publication, plus project token |
-| Block history cleanup | Daily at 03:30 | Always registered while botWarden is enabled, after any required migration |
+| Expired cache/local entries and block history cleanup | Daily at 03:30 | Always registered while botWarden is enabled, after any required migration |
 | Queued AbuseIPDB reports | Every 10 minutes | `enable_reporting` and AbuseIPDB API key |
 
 After enabling a list source, run its job from Grav's scheduler or wait for its scheduled refresh, then check the dashboard counts and scheduler results.
+
+The `botwarden-prune-history` job removes expired IP cache rows (including expired CrowdSec single-flight sentinels), expired automatic local blocks, and old or excess history rows even with `auto_clean: false`. It preserves unexpired cache/local entries and manual blocks; `local_ttl: 0` keeps automatic local blocks permanent. Size-based blacklist trimming and `VACUUM` remain in the optional `auto_clean` job, which also prunes before reclaiming database space. These tasks require a running Grav scheduler; registration alone does not execute them.
 
 ## Migrating from GRVHulk
 

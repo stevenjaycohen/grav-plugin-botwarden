@@ -55,11 +55,6 @@ class BotwardenPlugin extends Plugin
 
     public function onPluginsInitialized(): void
     {
-        // Conditionally load vendor autoload if not already provided by Grav
-        if (file_exists(__DIR__ . '/vendor/autoload.php')) {
-            require_once __DIR__ . '/vendor/autoload.php';
-        }
-
         $this->enable([
             'onRequestHandlerInit' => ['onRequestHandlerInit', 1000],
             'onSchedulerInitialized' => ['onSchedulerInitialized', 0],
@@ -77,10 +72,10 @@ class BotwardenPlugin extends Plugin
             || empty($config['dark_visitors']['api_key'])) {
             return;
         }
-        // The explicit connection action already sends its own test visit.
-        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-        if (str_ends_with($path, '/botwarden/known-agents/connect')) return;
         try {
+            if ($this->isAdmin() || $this->isManagementPath($this->grav['uri']->route())) {
+                return;
+            }
             $started = (float)($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
             $visit = DarkVisitorsClient::visit($_SERVER, headers_list(), http_response_code() ?: 200,
                 (microtime(true) - $started) * 1000);
@@ -109,12 +104,12 @@ class BotwardenPlugin extends Plugin
         } catch (\Throwable $e) {
             $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
         }
-        if ($this->isAdmin() || preg_match('~^/(?:admin|api/v1)(?:/|$)~', $path)) {
+        if ($this->isAdmin() || $this->isManagementPath($path)) {
             return;
         }
 
         // Detect client IP (forwarding headers honored only behind trusted proxies)
-        $trustedProxies = $this->parseLineList($config['trusted_proxies'] ?? '');
+        $trustedProxies = IpDetector::getTrustedProxies($config);
         $ip = IpDetector::getClientIp($trustedProxies);
 
         // Skip private/reserved IPs (localhost, LAN, etc.)
@@ -256,13 +251,24 @@ class BotwardenPlugin extends Plugin
                         if ($config['logging'] ?? false) {
                             $this->grav['log']->debug("[Warden] URI matched filter '{$filter}': {$uri}");
                         }
-                        BotwardenDatabase::addIpToLocal($db, $ip, 'URI filter: ' . $filter);
-                        if (!empty($config['enable_reporting']) && !empty($config['abuseipdb']['api_key'])) {
-                            // Queue the report (path only — the query string may carry
-                            // secrets) for the scheduler to send, so we never block the
-                            // request on a synchronous external API call.
-                            $pathOnly = parse_url($uri, PHP_URL_PATH) ?: '/';
-                            BotwardenDatabase::enqueueReport($db, $ip, $pathOnly);
+                        // Block unresolved proxy requests without banning or
+                        // reporting the shared peer, including equivalent IPv6 forms.
+                        // Cross-site embeds/links must not persist bans on readers.
+                        $fetchSite = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? null;
+                        $peer = $_SERVER['REMOTE_ADDR'] ?? '';
+                        $unresolvedProxy = IpDetector::isWhitelisted($peer, $trustedProxies)
+                            && inet_pton($ip) === inet_pton($peer);
+                        if (!IpDetector::hasUntrustedForwardingHeaders($trustedProxies)
+                            && !$unresolvedProxy
+                            && in_array($fetchSite, [null, 'none', 'same-origin'], true)) {
+                            BotwardenDatabase::addIpToLocal($db, $ip, 'URI filter: ' . $filter);
+                            if (!empty($config['enable_reporting']) && !empty($config['abuseipdb']['api_key'])) {
+                                // Queue the report (path only — the query string may carry
+                                // secrets) for the scheduler to send, so we never block the
+                                // request on a synchronous external API call.
+                                $pathOnly = parse_url($uri, PHP_URL_PATH) ?: '/';
+                                BotwardenDatabase::enqueueReport($db, $ip, $pathOnly);
+                            }
                         }
                         if ($config['enable_blacklisting'] ?? true) {
                             $this->rejectRequest($request);
@@ -282,6 +288,28 @@ class BotwardenPlugin extends Plugin
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /** Match the configured, site-relative Admin2 and versioned API routes. */
+    private function isManagementPath(string $path): bool
+    {
+        $config = $this->grav['config'];
+        $adminRoute = $config->get('plugins.admin2.route', '/admin');
+        $apiRoute = $config->get('plugins.api.route', '/api');
+        $prefixes = [];
+        if ($adminRoute) {
+            $prefixes[] = '/' . trim((string)$adminRoute, '/');
+        }
+        if ($apiRoute) {
+            $prefixes[] = '/' . trim((string)$apiRoute, '/') . '/'
+                . (string)$config->get('plugins.api.version_prefix', 'v1');
+        }
+        foreach ($prefixes as $prefix) {
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * Parse a multiline string into a trimmed array, skipping blank lines and # comments.
@@ -358,7 +386,6 @@ class BotwardenPlugin extends Plugin
         $routes->get('/botwarden/status', [$controller, 'status']);
         $routes->get('/botwarden/legacy', [$controller, 'legacy']);
         $routes->post('/botwarden/migrate', [$controller, 'migrateLegacy']);
-        $routes->post('/botwarden/known-agents/connect', [$controller, 'connectKnownAgents']);
         $routes->get('/botwarden/blocks', [$controller, 'blocks']);
         $routes->get('/botwarden/history', [$controller, 'history']);
         $routes->post('/botwarden/blocks', [$controller, 'addBlock']);
@@ -414,9 +441,8 @@ class BotwardenPlugin extends Plugin
             $job->at('35 2 * * *');
         }
 
-        // History pruning runs independently of auto_clean: the audit log is
-        // written on every block/unblock, so it must be bounded even when the
-        // blacklist auto-clean is disabled.
+        // Expired cache/local data and history need pruning even when optional
+        // blacklist trimming and database vacuuming are disabled.
         $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskPruneHistory', [], 'botwarden-prune-history');
         $job->backlink('plugins/botwarden');
         $job->at('30 3 * * *');
@@ -469,10 +495,8 @@ class BotwardenPlugin extends Plugin
     }
 
     /**
-     * Prune the block-history audit log on its own schedule. History rows are
-     * written on every block/unblock regardless of auto_clean, so this job must
-     * run independently of it — otherwise the table would grow unbounded for the
-     * default (auto_clean: false) configuration.
+     * Prune expired cache/local entries and block history independently of
+     * auto_clean. Size-based blacklist trimming and VACUUM remain optional.
      */
     public static function taskPruneHistory(): void
     {
@@ -481,11 +505,14 @@ class BotwardenPlugin extends Plugin
         $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
         $db      = BotwardenDatabase::getInstance($dataDir);
 
+        $localTtl   = (int)($config['local_ttl'] ?? 86400);
+        $expired    = BotwardenDatabase::pruneExpiredLocal($db, $localTtl);
+        BotwardenDatabase::pruneExpiredCache($db);
         $historyTtl = (int)($config['history_ttl'] ?? 2592000);
         $historyMax = (int)($config['history_max_rows'] ?? 50000);
         $pruned     = BotwardenDatabase::pruneHistory($db, $historyTtl, $historyMax);
 
-        echo "Warden: pruned {$pruned} history rows (ttl:{$historyTtl}s, max:{$historyMax}).\n";
+        echo "Warden: pruned {$pruned} history rows (ttl:{$historyTtl}s, max:{$historyMax}), {$expired} expired local entries (ttl:{$localTtl}s) and expired cache entries.\n";
     }
 
     public static function taskUpdateAbuseipdbBulk(): void

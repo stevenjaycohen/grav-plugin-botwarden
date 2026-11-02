@@ -24,7 +24,9 @@ final class ApiAuthorizationTest extends TestCase
         $url = getenv('BOTWARDEN_TEST_URL');
         if (!$url) self::markTestSkipped('Set BOTWARDEN_TEST_URL for the repository-local disposable Grav host.');
         self::$base = rtrim($url, '/');
-        if (self::$base !== 'http://127.0.0.1:8777') throw new \RuntimeException('Only the dedicated loopback fixture URL is allowed');
+        if (!in_array(self::$base, ['http://127.0.0.1:8777', 'http://127.0.0.1:8779/grav'], true)) {
+            throw new \RuntimeException('Only the dedicated loopback fixture URLs are allowed');
+        }
         self::$host = dirname(__DIR__) . '/vendor/.botwarden-migration/grav';
         self::$work = dirname(__DIR__) . '/vendor/.botwarden-migration/security';
         if (is_link(self::$work)) throw new \RuntimeException('Security work directory must not be a symlink');
@@ -71,7 +73,6 @@ final class ApiAuthorizationTest extends TestCase
             ['POST', '/botwarden/blocks', ['ip' => '198.51.100.200', 'reason' => 'Authorization fixture']],
             ['POST', '/botwarden/unblock', ['ip' => '198.51.100.200']],
             ['POST', '/botwarden/migrate', ['confirm' => true]],
-            ['POST', '/botwarden/known-agents/connect', []],
         ];
     }
 
@@ -229,9 +230,11 @@ final class ApiAuthorizationTest extends TestCase
         $this->assertSame(401, $response['status']);
     }
 
-    public function testKnownAgentsConnectionSendsOneVisitWithRegularReportingDisabled(): void
+    public function testRemovedKnownAgentsConnectionReturnsNotFoundWithoutSendingVisits(): void
     {
+        require_once self::$host . '/vendor/autoload.php';
         $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $this->assertFalse(is_link($path));
         $original = is_file($path) ? file_get_contents($path) : null;
         $mode = is_file($path) ? fileperms($path) & 0777 : null;
         $mtime = is_file($path) ? filemtime($path) : null;
@@ -241,30 +244,258 @@ final class ApiAuthorizationTest extends TestCase
         try {
             $config = $original === null ? [] : \Symfony\Component\Yaml\Yaml::parse($original);
             $config['dark_visitors']['api_key'] = 'synthetic-fixture-key';
-            $config['dark_visitors']['report_visits'] = false;
-            file_put_contents($path, json_encode($config, JSON_THROW_ON_ERROR));
-            self::helper('clear_cache');
-            $response = self::request('POST', '/api/v1/botwarden/known-agents/connect', [], self::headers('explicit_super'));
-            $this->assertSame(200, $response['status']);
-            $this->assertTrue($response['json']['data']['accepted']);
-            $requests = file($work . '/requests.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            $this->assertCount(1, $requests);
-            $request = json_decode($requests[0], true, 512, JSON_THROW_ON_ERROR);
-            $this->assertSame('visits', $request['service']);
-            $this->assertTrue($request['project_token_matches']);
-            $visits = json_decode($request['body'], true, 512, JSON_THROW_ON_ERROR);
-            $this->assertCount(1, $visits);
-            $this->assertTrue($visits[0]['metadata']['integration_test']);
-            $this->assertArrayNotHasKey('x-api-key', $visits[0]['request_headers']);
-            $response = self::request('POST', '/api/v1/botwarden/known-agents/connect', [],
-                self::headers('explicit_super') + ['X-botwarden-visit-scenario' => 'unauthorized']);
-            $this->assertSame(500, $response['status']);
+            foreach ([false, true] as $reportVisits) {
+                $config['dark_visitors']['report_visits'] = $reportVisits;
+                file_put_contents($path, json_encode($config, JSON_THROW_ON_ERROR));
+                self::helper('clear_cache');
+                $before = $this->state();
+                $response = self::request('POST', '/api/v1/botwarden/known-agents/connect', [], self::headers('explicit_super'));
+                $this->assertSame(404, $response['status']);
+                $this->assertStringContainsString('application/problem+json', (string)$response['type']);
+                // This request waits for the preceding shutdown hook to finish.
+                $this->assertSame(200, self::request('GET', '/api/v1/ping')['status']);
+                $this->assertFileDoesNotExist($work . '/requests.jsonl');
+                $this->assertSame($before, $this->state());
+            }
         } finally {
             if ($original === null) unlink($path);
             else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
             self::helper('clear_cache');
             if (is_file($work . '/requests.jsonl')) unlink($work . '/requests.jsonl');
             rmdir($work);
+        }
+    }
+
+    public function testPasswordCredentialFieldsPreserveMaskedValuesOnSettingsSave(): void
+    {
+        require_once self::$host . '/vendor/autoload.php';
+        $this->assertFileDoesNotExist(self::$host . '/user/data/api/webhooks.yaml', 'The disposable fixture must not deliver webhooks');
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $this->assertFalse(is_link($path));
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = is_file($path) ? fileperms($path) & 0777 : null;
+        $mtime = is_file($path) ? filemtime($path) : null;
+        $keys = [
+            'abuseipdb.api_key' => 'synthetic-abuseipdb-key',
+            'crowdsec.cti_api_key' => 'synthetic-crowdsec-cti-key',
+            'crowdsec.lapi_api_key' => 'synthetic-crowdsec-lapi-key',
+            'dark_visitors.api_key' => 'synthetic-known-agents-key',
+        ];
+        try {
+            $config = $original === null ? [] : \Symfony\Component\Yaml\Yaml::parse($original);
+            foreach ($keys as $name => $value) {
+                [$section, $field] = explode('.', $name, 2);
+                $config[$section][$field] = $value;
+            }
+            $config['dark_visitors']['report_visits'] = false;
+            $config['logging'] = false;
+            file_put_contents($path, json_encode($config, JSON_THROW_ON_ERROR));
+            self::helper('clear_cache');
+            $before = $this->state();
+            $headers = self::headers('unscoped_super') + ['X-Config-Environment' => 'default'];
+            $blueprint = self::request('GET', '/api/v1/blueprints/plugins/botwarden', null, $headers);
+            $this->assertSame(200, $blueprint['status']);
+            $types = array_column($blueprint['json']['data']['fields'], 'type', 'name');
+            foreach ($keys as $name => $value) $this->assertSame('password', $types[$name], $name);
+
+            $response = self::request('GET', '/api/v1/config/plugins/botwarden', null, $headers);
+            $this->assertSame(200, $response['status']);
+            $this->assertStringContainsString('application/json', (string)$response['type']);
+            $settings = $response['json']['data'];
+            foreach ($keys as $name => $value) {
+                [$section, $field] = explode('.', $name, 2);
+                $this->assertSame('********', $settings[$section][$field], $name);
+                $this->assertStringNotContainsString($value, $response['body']);
+            }
+            $settings['logging'] = true;
+            $saved = self::request('PATCH', '/api/v1/config/plugins/botwarden', $settings, $headers);
+            $this->assertSame(200, $saved['status']);
+            $disk = \Symfony\Component\Yaml\Yaml::parseFile($path);
+            $this->assertTrue($disk['logging']);
+            foreach ($keys as $name => $value) {
+                [$section, $field] = explode('.', $name, 2);
+                $this->assertSame($value, $disk[$section][$field], $name);
+                $this->assertSame('********', $saved['json']['data'][$section][$field], $name);
+                $this->assertStringNotContainsString($value, $saved['body']);
+            }
+
+            $changes = ['abuseipdb' => ['api_key' => 'synthetic-replacement-abuseipdb'],
+                'crowdsec' => ['cti_api_key' => 'synthetic-replacement-cti', 'lapi_api_key' => 'synthetic-replacement-lapi'],
+                'dark_visitors' => ['api_key' => '']];
+            $changed = self::request('PATCH', '/api/v1/config/plugins/botwarden', $changes, $headers);
+            $this->assertSame(200, $changed['status']);
+            $disk = \Symfony\Component\Yaml\Yaml::parseFile($path);
+            foreach ($changes as $section => $fields) {
+                foreach ($fields as $field => $value) {
+                    $this->assertSame($value, $disk[$section][$field], $section . '.' . $field);
+                    $this->assertSame($value === '' ? '' : '********', $changed['json']['data'][$section][$field]);
+                    if ($value !== '') $this->assertStringNotContainsString($value, $changed['body']);
+                }
+            }
+            $this->assertSame($before, $this->state(), 'Settings saves must not modify security data');
+        } finally {
+            if ($original === null) { if (is_file($path)) unlink($path); }
+            else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
+            self::helper('clear_cache');
+        }
+    }
+
+    public static function proxyWarningCases(): iterable
+    {
+        yield 'empty configuration' => ['', 'none', [], 'No trusted proxies'];
+        yield 'comments are not proxies' => ["# no proxies\n", 'none', [], 'No trusted proxies'];
+        yield 'custom trusted peer' => ['127.0.0.1', 'none', ['X-Forwarded-For' => '8.8.8.8'], null];
+        yield 'untrusted peer with forwarding header' => ['9.9.9.9', 'none', ['X-Forwarded-For' => '8.8.8.8'], 'outside Trusted Proxies'];
+        yield 'Cloudflare IPv4 preset' => ['', 'cloudflare', ['X-Botwarden-Fixture-Peer' => '173.245.48.1', 'CF-Connecting-IP' => '8.8.8.8'], null];
+        yield 'Cloudflare IPv6 preset' => ['', 'cloudflare', ['X-Botwarden-Fixture-Peer' => '2606:4700:4700::1111', 'CF-Connecting-IP' => '8.8.8.8'], null];
+        yield 'preset does not trust other peers' => ['', 'cloudflare', ['X-Botwarden-Fixture-Peer' => '1.1.1.1', 'X-Real-IP' => '8.8.8.8'], 'outside Trusted Proxies'];
+    }
+
+    #[DataProvider('proxyWarningCases')]
+    public function testProxyWarningFollowsEffectiveConfiguration(string $custom, string $preset, array $headers, ?string $warning): void
+    {
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $this->assertFalse(is_link($path));
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = is_file($path) ? fileperms($path) & 0777 : null;
+        $mtime = is_file($path) ? filemtime($path) : null;
+        try {
+            $config = $original === null ? [] : \Symfony\Component\Yaml\Yaml::parse($original);
+            $config['trusted_proxies'] = $custom;
+            $config['trusted_proxy_preset'] = $preset;
+            file_put_contents($path, json_encode($config, JSON_THROW_ON_ERROR));
+            self::helper('clear_cache');
+            $before = $this->state();
+            $response = self::request('GET', '/api/v1/botwarden/status', null, self::headers('explicit_super') + $headers);
+            $this->assertSame(200, $response['status']);
+            $data = $response['json']['data'];
+            $this->assertArrayHasKey('proxy_warning', $data);
+            if ($warning === null) $this->assertNull($data['proxy_warning']);
+            else $this->assertStringContainsString($warning, $data['proxy_warning']);
+            $this->assertSame($before, $this->state(), 'Dashboard warnings must not modify security data');
+            $this->assertSame(401, self::request('GET', '/api/v1/botwarden/status', null, $headers)['status']);
+        } finally {
+            if ($original === null) unlink($path);
+            else {
+                file_put_contents($path, $original);
+                chmod($path, $mode);
+                touch($path, $mtime);
+            }
+            self::helper('clear_cache');
+        }
+    }
+
+    public static function managementRouteCases(): iterable
+    {
+        yield 'default routes' => ['/admin', '/api', 'v1', '/admin', '/api/v1'];
+        yield 'custom routes and version' => ['/control', '/service', 'v2', '/control', '/service/v2'];
+        yield 'nested routes with surrounding slashes' => ['/control/panel/', '/service/internal/', 'v3', '/control/panel', '/service/internal/v3'];
+    }
+
+    #[DataProvider('managementRouteCases')]
+    public function testConfiguredManagementRoutesRemainAccessibleToBlockedIps(string $adminRoute, string $apiRoute, string $version, string $adminPath, string $apiPath): void
+    {
+        require_once self::$host . '/vendor/autoload.php';
+        $directory = self::$host . '/user/config/plugins/';
+        $originals = [];
+        foreach (['botwarden', 'admin2', 'api'] as $plugin) {
+            $path = $directory . $plugin . '.yaml';
+            $this->assertFalse(is_link($path));
+            $originals[$plugin] = is_file($path)
+                ? ['content' => file_get_contents($path), 'mode' => fileperms($path) & 0777, 'mtime' => filemtime($path)]
+                : null;
+        }
+        try {
+            foreach (['admin2' => ['route' => $adminRoute], 'api' => ['route' => $apiRoute, 'version_prefix' => $version],
+                'botwarden' => ['enabled' => true, 'trusted_proxies' => '127.0.0.1',
+                    'sources' => ['local' => true], 'enable_blacklisting' => true, 'response' => 418,
+                    'enable_filtering' => true, 'filters' => '.']] as $plugin => $changes) {
+                $config = $originals[$plugin] === null ? [] : \Symfony\Component\Yaml\Yaml::parse($originals[$plugin]['content']);
+                file_put_contents($directory . $plugin . '.yaml', json_encode(array_replace_recursive($config, $changes), JSON_THROW_ON_ERROR));
+            }
+            self::helper('clear_cache');
+            $db = new SQLite3(self::$host . '/user/data/botwarden/botwarden.sqlite');
+            $db->exec("INSERT INTO local (ip, is_manual) VALUES ('8.8.8.8', 1)");
+            $db->close();
+            $headers = ['X-Forwarded-For' => '8.8.8.8'];
+            $this->assertSame(418, self::request('GET', '/', null, $headers)['status']);
+            foreach ([$adminPath, $adminPath . '/plugin/botwarden'] as $path) {
+                $response = self::request('GET', $path, null, $headers);
+                $this->assertContains($response['status'], [200, 302], $path);
+                if ($response['status'] === 200) {
+                    $this->assertStringContainsString('text/html', (string)$response['type']);
+                    $this->assertMatchesRegularExpression('~<html(?:\s|>)~i', $response['body']);
+                }
+            }
+            $shell = self::request('GET', $adminPath . '/login', null, $headers);
+            $this->assertSame(200, $shell['status']);
+            $this->assertSame(1, preg_match('~window\.__GRAV_CONFIG__ = (.*?);</script>~s', $shell['body'], $boot));
+            $boot = json_decode($boot[1], true, 512, JSON_THROW_ON_ERROR);
+            $mount = parse_url(self::$base, PHP_URL_PATH) ?: '';
+            $this->assertSame($mount, $boot['serverUrl']);
+            $this->assertSame($mount . $adminPath, $boot['basePath']);
+            $this->assertSame($apiPath, $boot['apiPrefix']);
+            $this->assertSame(1, preg_match('~(?:src|href)="([^"]+/_app/[^"]+\.js)"~', $shell['body'], $asset));
+            $this->assertStringStartsWith($mount . '/user/plugins/admin2/app/_app/', $asset[1]);
+            $script = self::request('GET', substr($asset[1], strlen($mount)), null, $headers);
+            $this->assertSame(200, $script['status']);
+            $this->assertMatchesRegularExpression('~(?:text|application)/javascript~', (string)$script['type']);
+            $this->assertNotSame('', $script['body']);
+            $ping = self::request('GET', $apiPath . '/ping', null, $headers);
+            $this->assertSame(200, $ping['status']);
+            $this->assertStringContainsString('application/json', (string)$ping['type']);
+            $this->assertIsArray($ping['json']);
+            $this->assertSame(401, self::request('GET', $apiPath, null, $headers)['status']);
+            $this->assertSame(401, self::request('GET', $apiPath . '/botwarden/status', null, $headers)['status']);
+            $status = self::request('GET', $apiPath . '/botwarden/status', null, self::headers('explicit_super') + $headers);
+            $this->assertSame(200, $status['status']);
+            $this->assertSame(1, $status['json']['data']['local_count']);
+            $this->assertSame(422, self::request('POST', $apiPath . '/auth/token', [], $headers)['status']);
+            foreach (['limited' => 403, 'non_super' => 403, 'pending_two_factor' => 401] as $credential => $expected) {
+                $denied = self::request('GET', $apiPath . '/botwarden/status', null, self::headers($credential) + $headers);
+                $this->assertSame($expected, $denied['status']);
+                $this->assertStringContainsString('application/problem+json', (string)$denied['type']);
+            }
+            $this->assertSame(401, self::request('POST', $apiPath . '/auth/token',
+                ['username' => self::$credentials['accounts']['super']['username'], 'password' => 'invalid-fixture-password'], $headers)['status']);
+            $login = self::request('POST', $apiPath . '/auth/token', self::$credentials['accounts']['super'], $headers);
+            $this->assertSame(200, $login['status']);
+            $tokens = $login['json']['data'];
+            try {
+                $authenticated = ['Authorization' => 'Bearer ' . $tokens['access_token']] + $headers;
+                $this->assertSame(200, self::request('GET', $apiPath . '/botwarden/status', null, $authenticated)['status']);
+                $origin = substr(self::$base, 0, strlen(self::$base) - strlen($mount));
+                foreach ([$authenticated, ['Cookie' => self::$credentials['sessions']['management'], 'Origin' => $origin] + $headers] as $authorized) {
+                    $this->assertSame(200, self::request('POST', $apiPath . '/botwarden/blocks',
+                        ['ip' => '198.51.100.201', 'reason' => 'Mounted route fixture'], $authorized)['status']);
+                    $this->assertSame(200, self::request('POST', $apiPath . '/botwarden/unblock',
+                        ['ip' => '198.51.100.201'], $authorized)['status']);
+                }
+            } finally {
+                $this->assertSame(204, self::request('POST', $apiPath . '/auth/revoke',
+                    ['refresh_token' => $tokens['refresh_token']], $headers)['status']);
+            }
+            foreach ([$adminPath . 'istrator', $apiPath . '0/ping', '/' . trim($apiRoute, '/') . '/other-version/ping', '/apiary/v1/ping'] as $path) {
+                $this->assertSame(418, self::request('GET', $path, null, $headers)['status'], $path);
+            }
+            if ($adminPath !== '/admin') $this->assertSame(418, self::request('GET', '/admin', null, $headers)['status']);
+            if ($apiPath !== '/api/v1') $this->assertSame(418, self::request('GET', '/api/v1/ping', null, $headers)['status']);
+            $db = new SQLite3(self::$host . '/user/data/botwarden/botwarden.sqlite', SQLITE3_OPEN_READONLY);
+            try {
+                $this->assertSame(1, (int)$db->querySingle('SELECT COUNT(*) FROM local'));
+                $this->assertSame(0, (int)$db->querySingle('SELECT COUNT(*) FROM report_queue'));
+            } finally { $db->close(); }
+        } finally {
+            foreach ($originals as $plugin => $original) {
+                $path = $directory . $plugin . '.yaml';
+                if ($original === null) { if (is_file($path)) unlink($path); }
+                else {
+                    file_put_contents($path, $original['content']);
+                    chmod($path, $original['mode']);
+                    touch($path, $original['mtime']);
+                }
+            }
+            self::helper('clear_cache');
         }
     }
 
@@ -279,8 +510,6 @@ final class ApiAuthorizationTest extends TestCase
         $this->assertSame(200, $response['status']);
         $response = self::request('POST', '/api/v1/botwarden/migrate', ['confirm' => false], $headers);
         $this->assertSame(422, $response['status'], 'Authorized requests still need explicit migration confirmation');
-        $response = self::request('POST', '/api/v1/botwarden/known-agents/connect', [], $headers);
-        $this->assertSame(422, $response['status'], 'Connection requires a configured project token');
     }
 
     private static function headers(string $credential): array
@@ -336,8 +565,9 @@ final class ApiAuthorizationTest extends TestCase
         $raw = curl_exec($curl);
         if ($raw === false) throw new \RuntimeException('Loopback HTTP transport failed: ' . curl_errno($curl));
         $status = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+        $type = curl_getinfo($curl, CURLINFO_CONTENT_TYPE);
         curl_close($curl);
-        return ['status' => $status, 'body' => $raw, 'json' => json_decode($raw, true)];
+        return ['status' => $status, 'type' => $type, 'body' => $raw, 'json' => json_decode($raw, true)];
     }
 
     private static function login(): array

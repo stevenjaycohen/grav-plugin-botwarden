@@ -42,6 +42,7 @@ namespace {
             'service' => $service, 'scenario' => $scenario,
             'method' => $_SERVER['REQUEST_METHOD'], 'body' => $body,
             'content_type' => $_SERVER['CONTENT_TYPE'] ?? '',
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
             'project_token_matches' => ($_SERVER['HTTP_AUTHORIZATION'] ?? '') === 'Bearer synthetic-fixture-key',
         ], JSON_THROW_ON_ERROR) . "\n", FILE_APPEND | LOCK_EX);
         if (in_array($scenario, ['unauthorized', 'server_error', 'rate_limit', 'not_found'], true)) {
@@ -112,7 +113,7 @@ namespace {
         }
     } elseif ($operation === 'init') {
         $db = Grav\Plugin\Botwarden\BotwardenDatabase::getInstance($host . '/user/data/botwarden');
-        $result = ['integrity' => $db->querySingle('PRAGMA integrity_check')];
+        $result = ['integrity' => $db->querySingle('PRAGMA integrity_check'), 'bundled_filters' => $defaults['filters']];
     } elseif ($operation === 'bulk-load') {
         $db = Grav\Plugin\Botwarden\BotwardenDatabase::getInstance($host . '/user/data/botwarden');
         $ips = (static function () use ($work) {

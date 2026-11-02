@@ -18,9 +18,13 @@ whitelist: |
 # Trusted reverse-proxy / CDN IPs or CIDRs. Forwarding headers
 # (CF-Connecting-IP, X-Real-IP, X-Forwarded-For) are honored ONLY when the
 # direct connection (REMOTE_ADDR) matches one of these. Empty = trust no
-# forwarding headers and use REMOTE_ADDR only. Set this if you sit behind
-# Cloudflare, nginx, or a load balancer — otherwise client IPs can be spoofed.
+# forwarding headers and use REMOTE_ADDR only, unless a preset is selected.
+# Configure this behind nginx or a load balancer to identify visitors correctly.
 trusted_proxies: ''
+# Opt in to Cloudflare's published IPv4/IPv6 proxy ranges, in addition to the
+# custom entries above. Bundled ranges verified 2026-11-01; no runtime downloads.
+# https://www.cloudflare.com/ips/ — select cloudflare only if this site uses it.
+trusted_proxy_preset: none
 
 # AbuseIPDB settings (https://www.abuseipdb.com/)
 abuseipdb:

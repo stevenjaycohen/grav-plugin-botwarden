@@ -6,23 +6,85 @@ const { runInNewContext } = require('node:vm');
 
 const script = readFileSync(join(__dirname, '../admin-next/pages/botwarden.js'), 'utf8');
 
-function pageFor(confirm, post, get) {
+function pageFor(confirm, post, get, globals = {}) {
   let Page;
   runInNewContext(script, {
     HTMLElement: class {},
-    window: { __GRAV_DIALOGS: { confirm }, __GRAV_API: { post, get } },
+    window: { __GRAV_DIALOGS: { confirm }, __GRAV_API: { post, get }, ...globals },
     customElements: { get() {}, define(tag, type) { Page = type; } },
   });
   const page = new Page();
   const button = { disabled: false };
   const message = { textContent: '', className: '' };
   const elements = { migrate: button, message };
-  page.shadowRoot = { getElementById(id) { return elements[id] || (elements[id] = {}); } };
+  page.shadowRoot = { getElementById(id) {
+    const element = elements[id] || (elements[id] = {});
+    if (!element.addEventListener) {
+      element.listeners = {};
+      element.addEventListener = (type, handler) => { element.listeners[type] = handler; };
+    }
+    return element;
+  } };
   const refresh = page.refresh.bind(page);
   let refreshes = 0;
   page.refresh = async () => { refreshes++; };
   return { page, button, message, elements, refresh, refreshes: () => refreshes };
 }
+
+test('settings uses Admin2 navigation with the configured base for an ordinary click', () => {
+  for (const base of [undefined, '/subsite/control']) {
+    const routes = [];
+    const fixture = pageFor(undefined, undefined, undefined, {
+      __GRAV_ADMIN_BASE: base, __GRAV_NAVIGATE: path => routes.push(path),
+    });
+    fixture.page.render();
+    const link = fixture.elements.settings;
+    const expected = base ? '/subsite/control/plugins/botwarden' : '/admin/plugins/botwarden';
+    assert.equal(link.href, expected);
+    let prevented = false;
+    link.listeners.click({button: 0, preventDefault() { prevented = true; }});
+    assert.equal(prevented, true);
+    assert.deepEqual(routes, [expected]);
+  }
+});
+
+test('modified and already-handled settings clicks retain normal link behavior', () => {
+  let navigations = 0;
+  const fixture = pageFor(undefined, undefined, undefined, {__GRAV_NAVIGATE: () => { navigations++; }});
+  fixture.page.render();
+  for (const options of [{ctrlKey: true}, {metaKey: true}, {shiftKey: true}, {altKey: true},
+    {button: 1}, {button: 2}, {defaultPrevented: true}]) {
+    fixture.elements.settings.listeners.click({button: 0, ...options,
+      preventDefault() { assert.fail('Native link behavior must be preserved'); }});
+  }
+  assert.equal(navigations, 0);
+  assert.equal(fixture.elements.settings.href, '/admin/plugins/botwarden');
+});
+
+test('settings retains a working link if the Admin2 navigation hook is unavailable', () => {
+  const fixture = pageFor(undefined, undefined, undefined);
+  fixture.page.render();
+  fixture.elements.settings.listeners.click({button: 0,
+    preventDefault() { assert.fail('The ordinary link must remain available'); }});
+  assert.equal(fixture.elements.settings.href, '/admin/plugins/botwarden');
+});
+
+test('tables format Unix seconds as local dates without changing API rows or other cells', () => {
+  const fixture = pageFor(undefined, undefined, undefined);
+  const blocks = [{ip: '203.0.113.1', reason: '1700000000', added_at: 1700000000},
+    {ip: '203.0.113.2', reason: '<script>untrusted</script>', added_at: null}];
+  const history = [{ip: '203.0.113.1', action: 'block', reason: 'manual', acted_at: 1700003600},
+    {ip: '203.0.113.2', action: 'unblock', reason: 'manual'}];
+  const before = JSON.stringify([blocks, history]);
+  fixture.page.table('blocks', ['IP', 'Reason', 'Added (local time)'], blocks, ['ip', 'reason', 'added_at']);
+  fixture.page.table('history', ['IP', 'Action', 'Reason', 'Time (local time)'], history, ['ip', 'action', 'reason', 'acted_at']);
+  const cells = id => Array.from(fixture.elements[id].innerHTML.matchAll(/<td>(.*?)<\/td>/g), match => match[1]);
+  assert.deepEqual(cells('blocks'), ['203.0.113.1', '1700000000', new Date('2023-11-14T22:13:20Z').toLocaleString(),
+    '203.0.113.2', '&lt;script&gt;untrusted&lt;/script&gt;', '']);
+  assert.deepEqual(cells('history'), ['203.0.113.1', 'block', 'manual', new Date('2023-11-14T23:13:20Z').toLocaleString(),
+    '203.0.113.2', 'unblock', 'manual', '']);
+  assert.equal(JSON.stringify([blocks, history]), before);
+});
 
 test('cancelling migration sends no request and explains which installation remains unchanged', async () => {
   let dialog;
@@ -68,15 +130,35 @@ test('failed migration exposes the error and restores the confirmation button', 
   assert.equal(fixture.button.disabled, false);
 });
 
-function dashboardFor(legacy, post) {
+function dashboardFor(legacy, post, stats = {}) {
   return pageFor(async () => true, post, async path => {
     if (path === '/botwarden/legacy') return legacy;
     if (path === '/botwarden/status') return {
-      local_count: 0, history_count: 0, abuseipdb_bulk_count: 0, dark_visitors_count: 0,
+      local_count: 0, history_count: 0, abuseipdb_bulk_count: 0, dark_visitors_count: 0, ...stats,
     };
     return { entries: [], total: 0 };
   });
 }
+
+test('proxy warning displays as text and clears after configuration is corrected', async () => {
+  const stats = { proxy_warning: 'Configure Trusted Proxies <script>untrusted</script>' };
+  const fixture = dashboardFor({ migration_complete: true }, undefined, stats);
+  await fixture.refresh();
+  assert.equal(fixture.elements['proxy-warning'].hidden, false);
+  assert.equal(fixture.elements['proxy-warning'].textContent, stats.proxy_warning);
+  assert.equal(fixture.elements['proxy-warning'].innerHTML, undefined);
+  stats.proxy_warning = null;
+  await fixture.refresh();
+  assert.equal(fixture.elements['proxy-warning'].hidden, true);
+  assert.equal(fixture.elements['proxy-warning'].textContent, '');
+});
+
+test('dashboard hides the proxy warning when the API has none', async () => {
+  const fixture = dashboardFor({ migration_complete: true });
+  await fixture.refresh();
+  assert.equal(fixture.elements['proxy-warning'].hidden, true);
+  assert.equal(fixture.elements['proxy-warning'].textContent, '');
+});
 
 test('completed migration hides the notice even while legacy artifacts remain', async () => {
   const fixture = dashboardFor({ detected: true, can_migrate: false, migration_complete: true });

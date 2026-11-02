@@ -122,6 +122,65 @@ class IpDetectorTest extends TestCase
 
     // ── getClientIp ──────────────────────────────────────────────────────────
 
+    public function testProxyPresetRequiresExplicitSelection(): void
+    {
+        $this->assertSame([], IpDetector::getTrustedProxies([]));
+        $this->assertSame([], IpDetector::getTrustedProxies(['trusted_proxy_preset' => 'none']));
+        $this->assertSame([], IpDetector::getTrustedProxies(['trusted_proxy_preset' => 'unknown']));
+    }
+
+    public function testCustomProxyEntriesAcceptStringsAndArrays(): void
+    {
+        $this->assertSame(['127.0.0.1', '10.0.0.0/8'], IpDetector::getTrustedProxies([
+            'trusted_proxies' => " # comment\n 127.0.0.1 \n\n10.0.0.0/8\n",
+        ]));
+        $this->assertSame(['::1'], IpDetector::getTrustedProxies([
+            'trusted_proxies' => [' # comment', ' ::1 ', ''],
+        ]));
+    }
+
+    public function testCloudflarePresetAddsBothAddressFamiliesAndPreservesCustomProxies(): void
+    {
+        $proxies = IpDetector::getTrustedProxies(['trusted_proxy_preset' => 'cloudflare', 'trusted_proxies' => '127.0.0.1']);
+        $this->assertCount(23, $proxies);
+        foreach (['127.0.0.1', '173.245.48.1', '104.16.0.1', '2400:cb00::1', '2c0f:f248::1'] as $ip) {
+            $this->assertTrue(IpDetector::isWhitelisted($ip, $proxies), $ip);
+        }
+        foreach (['1.1.1.1', '173.245.47.255', '104.32.0.1', '2400:cb01::1'] as $ip) {
+            $this->assertFalse(IpDetector::isWhitelisted($ip, $proxies), $ip);
+        }
+    }
+
+    public function testCloudflarePresetOnlyHonorsHeadersFromMatchingPeers(): void
+    {
+        $proxies = IpDetector::getTrustedProxies(['trusted_proxy_preset' => 'cloudflare']);
+        foreach (['173.245.48.1', '2606:4700:4700::1111'] as $peer) {
+            $_SERVER = ['REMOTE_ADDR' => $peer, 'HTTP_CF_CONNECTING_IP' => '8.8.8.8'];
+            $this->assertSame('8.8.8.8', IpDetector::getClientIp($proxies));
+            $this->assertFalse(IpDetector::hasUntrustedForwardingHeaders($proxies));
+        }
+        $_SERVER = ['REMOTE_ADDR' => '1.1.1.1', 'HTTP_CF_CONNECTING_IP' => '8.8.8.8'];
+        $this->assertSame('1.1.1.1', IpDetector::getClientIp($proxies));
+        $this->assertTrue(IpDetector::hasUntrustedForwardingHeaders($proxies));
+    }
+
+    public function testForwardingHeaderPresenceRequiresATrustedPeerForPersistence(): void
+    {
+        $_SERVER = ['REMOTE_ADDR' => '1.1.1.1'];
+        $this->assertFalse(IpDetector::hasUntrustedForwardingHeaders());
+        foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP'] as $header) {
+            foreach (['8.8.8.8', '', 'invalid'] as $value) {
+                $_SERVER = ['REMOTE_ADDR' => '1.1.1.1', $header => $value];
+                $this->assertTrue(IpDetector::hasUntrustedForwardingHeaders());
+                $this->assertTrue(IpDetector::hasUntrustedForwardingHeaders(['9.9.9.9']));
+                $this->assertFalse(IpDetector::hasUntrustedForwardingHeaders(['1.1.1.0/24']));
+            }
+        }
+        $_SERVER = ['REMOTE_ADDR' => '2606:4700:4700::1111', 'HTTP_X_FORWARDED_FOR' => '8.8.8.8'];
+        $this->assertTrue(IpDetector::hasUntrustedForwardingHeaders(['1.1.1.0/24']));
+        $this->assertFalse(IpDetector::hasUntrustedForwardingHeaders(['2606:4700::/32']));
+    }
+
     public function testGetClientIpFromRemoteAddr(): void
     {
         unset($_SERVER['HTTP_CF_CONNECTING_IP'], $_SERVER['HTTP_X_REAL_IP'],

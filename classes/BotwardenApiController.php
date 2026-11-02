@@ -36,16 +36,25 @@ final class BotwardenApiController extends AbstractApiController
     public function status(ServerRequestInterface $request): ResponseInterface
     {
         $this->requirePermission($request, 'api.super');
+        $config = (array)Grav::instance()['config']->get('plugins.botwarden', []);
+        $trustedProxies = IpDetector::getTrustedProxies($config);
+        $proxyWarning = null;
+        if ($trustedProxies === []) {
+            $proxyWarning = 'No trusted proxies are configured. If this site uses a CDN or reverse proxy, configure Trusted Proxies or select the Cloudflare preset in Plugin settings so botWarden can identify visitors correctly.';
+        } elseif (IpDetector::hasUntrustedForwardingHeaders($trustedProxies)) {
+            $proxyWarning = 'Forwarding headers on this request came from a peer outside Trusted Proxies. Check Trusted Proxies and the proxy preset in Plugin settings; botWarden is using the direct connection address.';
+        }
         $db = $this->existingDb();
         if ($db === null) {
             return ApiResponse::create(['local_count' => 0, 'history_count' => 0,
-                'abuseipdb_bulk_count' => 0, 'dark_visitors_count' => 0]);
+                'abuseipdb_bulk_count' => 0, 'dark_visitors_count' => 0, 'proxy_warning' => $proxyWarning]);
         }
         return ApiResponse::create([
             'local_count' => BotwardenDatabase::getLocalCount($db),
             'history_count' => BotwardenDatabase::getHistoryCount($db),
             'abuseipdb_bulk_count' => BotwardenDatabase::getAbuseipdbBulkCount($db),
             'dark_visitors_count' => BotwardenDatabase::getDarkVisitorsCount($db),
+            'proxy_warning' => $proxyWarning,
         ]);
     }
 
@@ -53,21 +62,6 @@ final class BotwardenApiController extends AbstractApiController
     {
         $this->requirePermission($request, 'api.super');
         return ApiResponse::create(LegacyMigration::preview($this->userDir()));
-    }
-
-    public function connectKnownAgents(ServerRequestInterface $request): ResponseInterface
-    {
-        $this->requirePermission($request, 'api.super');
-        $token = trim((string)Grav::instance()['config']->get('plugins.botwarden.dark_visitors.api_key', ''));
-        if ($token === '') {
-            throw new ValidationException('Save your Known Agents project access token in plugin settings first', [
-                ['field' => 'dark_visitors.api_key', 'message' => 'Project access token required'],
-            ]);
-        }
-        $visit = DarkVisitorsClient::visit($request->getServerParams());
-        $visit['metadata'] = ['integration_test' => true];
-        (new DarkVisitorsClient($token))->reportVisit($visit);
-        return ApiResponse::create(['accepted' => true]);
     }
 
     public function migrateLegacy(ServerRequestInterface $request): ResponseInterface

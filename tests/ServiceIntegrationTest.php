@@ -12,6 +12,7 @@ use SQLite3;
 final class ServiceIntegrationTest extends TestCase
 {
     private static string $host;
+    private static string $base;
     private static string $work;
     private static string $data;
     private static string $configPath;
@@ -21,11 +22,13 @@ final class ServiceIntegrationTest extends TestCase
     private static bool $prepared = false;
     private static bool $ownsRobotsFixture = false;
     private static array $observations = [];
+    private static string $bundledFilters;
     private SQLite3 $db;
 
     public static function setUpBeforeClass(): void
     {
-        if (getenv('BOTWARDEN_TEST_URL') !== 'http://127.0.0.1:8777') {
+        self::$base = getenv('BOTWARDEN_TEST_URL') ?: '';
+        if (!in_array(self::$base, ['http://127.0.0.1:8777', 'http://127.0.0.1:8779/grav'], true)) {
             self::markTestSkipped('Opt in to the disposable Grav and loopback service fixtures.');
         }
         $repo = dirname(__DIR__);
@@ -48,7 +51,7 @@ final class ServiceIntegrationTest extends TestCase
         mkdir(self::$data, 0700);
         file_put_contents(self::$data . '/migration-complete.json', '{"purpose":"service-integration-fixture"}');
         self::$prepared = true;
-        self::helper(['operation' => 'init']);
+        self::$bundledFilters = self::helper(['operation' => 'init'])['bundled_filters'];
     }
 
     public static function tearDownAfterClass(): void
@@ -194,11 +197,11 @@ final class ServiceIntegrationTest extends TestCase
             file(self::$work . '/requests.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
     }
 
-    private static function http(string $path, string $ip = '8.8.8.8', string $agent = 'FixtureBrowser', array $headers = [], string $method = 'GET', ?string $requestBody = null): array
+    private static function http(string $path, string $ip = '8.8.8.8', string $agent = 'FixtureBrowser', array $headers = [], string $method = 'GET', ?string $requestBody = null, bool $forwarded = true): array
     {
-        $handle = curl_init('http://127.0.0.1:8777' . $path);
+        $handle = curl_init(self::$base . $path);
         $options = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15,
-            CURLOPT_HTTPHEADER => array_merge(['X-Forwarded-For: ' . $ip], $headers),
+            CURLOPT_HTTPHEADER => array_merge($forwarded ? ['X-Forwarded-For: ' . $ip] : [], $headers),
             CURLOPT_USERAGENT => $agent, CURLOPT_CUSTOMREQUEST => $method];
         if ($requestBody !== null) $options[CURLOPT_POSTFIELDS] = $requestBody;
         curl_setopt_array($handle, $options);
@@ -218,6 +221,32 @@ final class ServiceIntegrationTest extends TestCase
             usleep(10000);
         } while (microtime(true) < $deadline);
         return $requests;
+    }
+
+    public function testProviderRequestsUseTheManifestVersionInTheirUserAgent(): void
+    {
+        require_once self::$host . '/vendor/autoload.php';
+        $this->assertFileDoesNotExist(self::$host . '/user/plugins/botwarden/vendor/autoload.php');
+        $manifest = \Symfony\Component\Yaml\Yaml::parseFile(dirname(__DIR__) . '/blueprints.yaml');
+        $this->assertTrue($this->job('botwarden-abuseipdb-cache')['success']);
+        $this->assertTrue($this->job('botwarden-dark-visitors')['success']);
+        self::helper(['operation' => 'cti', 'config' => ['crowdsec' => ['cti_api_key' => 'synthetic-fixture-key']]]);
+        self::helper(['operation' => 'lapi', 'config' => ['crowdsec' => ['mode' => 'lapi',
+            'lapi_api_key' => 'synthetic-fixture-key', 'lapi_url' => 'http://127.0.0.1:8778']]]);
+        $this->db->exec("INSERT INTO report_queue (ip, path) VALUES ('198.51.100.30', '/synthetic-version-check')");
+        $this->assertTrue($this->job('botwarden-flush-reports')['success']);
+        $this->assertTrue(self::helper(['operation' => 'visit'])['accepted']);
+        $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
+        $page = self::http('/');
+        $this->assertSame(200, $page['status']);
+        $this->assertStringContainsString('text/html', (string)$page['type']);
+        $this->assertStringContainsString('Synthetic botWarden migration test site.', $page['body']);
+        $this->assertCount(2, $this->waitForVisits(2));
+        $requests = $this->requests();
+        $this->assertSame(['bulk', 'agents', 'cti', 'lapi', 'report', 'visits', 'visits'], array_column($requests, 'service'));
+        foreach ($requests as $request) {
+            $this->assertSame('botWarden/' . $manifest['version'], $request['user_agent'], $request['service']);
+        }
     }
 
     public function testKnownAgentsVisitUsesBearerTokenJsonBatchAnd204Acceptance(): void
@@ -279,23 +308,119 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertCount(1, $this->requests());
     }
 
-    public function testKnownAgentsTracksApiRequestsAndProtocolHeadersWithoutBodies(): void
+    public function testKnownAgentsTracksPublicRequestsAndProtocolHeadersWithoutBodies(): void
     {
         $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
-        $response = self::http('/api/v1/ping', '198.51.100.8', 'FixtureAgent', [
+        $response = self::http('/?token=private', '198.51.100.8', 'FixtureAgent', [
             'MCP-Protocol-Version: 2025-06-18', 'API-Version: 2026-01-30', 'UCP-Agent: FixtureCommerce',
             'Content-Type: application/json',
         ], 'POST', '{"private":"must-not-be-reported"}');
         $requests = $this->waitForVisits(1);
         $this->assertCount(1, $requests);
         $visit = json_decode($requests[0]['body'], true, 512, JSON_THROW_ON_ERROR)[0];
-        $this->assertSame('/api/v1/ping', $visit['request_path']);
+        $this->assertSame('/', $visit['request_path']);
         $this->assertSame('POST', $visit['request_method']);
         $this->assertSame($response['status'], $visit['response_status_code']);
         $this->assertSame('2025-06-18', $visit['request_headers']['mcp-protocol-version']);
         $this->assertSame('2026-01-30', $visit['request_headers']['api-version']);
         $this->assertSame('FixtureCommerce', $visit['request_headers']['ucp-agent']);
         $this->assertStringNotContainsString('must-not-be-reported', $requests[0]['body']);
+    }
+
+    public static function visitReportingRoutes(): iterable
+    {
+        yield 'default routes' => ['/admin', '/api', 'v1', '/admin', '/api/v1'];
+        yield 'custom routes' => ['/control', '/service', 'v2', '/control', '/service/v2'];
+        yield 'nested routes' => ['/control/panel/', '/service/internal/', 'v3', '/control/panel', '/service/internal/v3'];
+    }
+
+    #[DataProvider('visitReportingRoutes')]
+    public function testKnownAgentsSkipsManagementRoutesAndReportsPublicLookalikes(string $adminRoute, string $apiRoute, string $version, string $adminPath, string $apiPath): void
+    {
+        require_once self::$host . '/vendor/autoload.php';
+        // The API plugin disables page processing under its base, even for a
+        // different version. Keep these synthetic public aliases outside it.
+        $lookalikes = [$adminPath . 'istrator', '/' . trim($apiRoute, '/') . 'ary/' . $version . '/ping'];
+        if ($adminPath !== '/admin') $lookalikes[] = '/admin';
+        if ($apiPath !== '/api/v1') $lookalikes[] = '/api/v1/ping';
+        $pageDirectory = self::$host . '/user/pages/98.botwarden-reporting-fixture';
+        $this->assertDirectoryDoesNotExist($pageDirectory);
+        $this->assertFalse(is_link($pageDirectory));
+        $pageContent = "---\n" . \Symfony\Component\Yaml\Yaml::dump([
+            'title' => 'Synthetic reporting fixture', 'routes' => ['aliases' => $lookalikes],
+        ]) . "---\nSynthetic botWarden public reporting page.\n";
+        $pageCreated = false;
+        $originals = [];
+        foreach (['admin2', 'api'] as $plugin) {
+            $path = self::$host . '/user/config/plugins/' . $plugin . '.yaml';
+            $this->assertFalse(is_link($path));
+            $originals[$plugin] = is_file($path)
+                ? ['content' => file_get_contents($path), 'mode' => fileperms($path) & 0777, 'mtime' => filemtime($path)]
+                : null;
+        }
+        try {
+            if (!mkdir($pageDirectory, 0700)) throw new \RuntimeException('Could not create synthetic reporting page');
+            $pageCreated = true;
+            $handle = fopen($pageDirectory . '/default.md', 'x');
+            if ($handle === false) throw new \RuntimeException('Synthetic page path is occupied');
+            try {
+                if (fwrite($handle, $pageContent) !== strlen($pageContent)) throw new \RuntimeException('Incomplete synthetic reporting page');
+            } finally { fclose($handle); }
+            foreach (['admin2' => ['route' => $adminRoute], 'api' => ['route' => $apiRoute, 'version_prefix' => $version]] as $plugin => $changes) {
+                $config = $originals[$plugin] === null ? [] : \Symfony\Component\Yaml\Yaml::parse($originals[$plugin]['content']);
+                file_put_contents(self::$host . '/user/config/plugins/' . $plugin . '.yaml',
+                    json_encode(array_replace_recursive($config, $changes), JSON_THROW_ON_ERROR));
+            }
+            $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
+            foreach ([$adminPath, $adminPath . '/plugin/botwarden'] as $path) {
+                $this->assertContains(self::http($path)['status'], [200, 302], $path);
+            }
+            $ping = self::http($apiPath . '/ping');
+            $this->assertSame(200, $ping['status']);
+            $this->assertStringContainsString('application/json', (string)$ping['type']);
+            $this->assertSame(401, self::http($apiPath)['status']);
+            $this->assertSame(401, self::http($apiPath . '/botwarden/status')['status']);
+            $this->assertSame(422, self::http($apiPath . '/auth/token', '8.8.8.8', 'FixtureBrowser',
+                ['Content-Type: application/json'], 'POST', '{}')['status']);
+            // The single-worker server handles this after earlier shutdown hooks.
+            // Its one public visit proves the reporting transport is active.
+            $this->assertSame(200, self::http('/?token=private')['status']);
+            $requests = $this->waitForVisits(1);
+            $this->assertCount(1, $requests, 'Management requests must not send automatic visits');
+            $mount = parse_url(self::$base, PHP_URL_PATH) ?: '';
+            $this->assertSame($mount . '/', json_decode($requests[0]['body'], true, 512, JSON_THROW_ON_ERROR)[0]['request_path']);
+
+            foreach ($lookalikes as $path) {
+                $response = self::http($path);
+                $this->assertSame(200, $response['status'], $path);
+                $this->assertStringContainsString('text/html', (string)$response['type']);
+                $this->assertStringContainsString('Synthetic botWarden public reporting page.', $response['body']);
+            }
+            $this->assertSame(200, self::http('/')['status']);
+            $requests = $this->waitForVisits(count($lookalikes) + 2);
+            $this->assertSame(array_map(static fn(string $path): string => $mount . $path, array_merge(['/'], $lookalikes, ['/'])), array_map(
+                static fn(array $request): string => json_decode($request['body'], true, 512, JSON_THROW_ON_ERROR)[0]['request_path'],
+                $requests));
+        } finally {
+            foreach ($originals as $plugin => $original) {
+                $path = self::$host . '/user/config/plugins/' . $plugin . '.yaml';
+                if ($original === null) { if (is_file($path)) unlink($path); }
+                else {
+                    file_put_contents($path, $original['content']);
+                    chmod($path, $original['mode']);
+                    touch($path, $original['mtime']);
+                }
+            }
+            if ($pageCreated) {
+                if (is_link($pageDirectory) || is_link($pageDirectory . '/default.md')
+                    || scandir($pageDirectory) !== ['.', '..', 'default.md']) {
+                    throw new \RuntimeException('Unexpected synthetic page contents; preserve evidence');
+                }
+                unlink($pageDirectory . '/default.md');
+                rmdir($pageDirectory);
+            }
+            self::helper(['operation' => 'clear']);
+        }
     }
 
     public function testKnownAgentsReportingFailureLeavesThePageResponseUnchanged(): void
@@ -433,6 +558,254 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertCount(4, $this->requests());
     }
 
+    public static function trustedProxyAttributionCases(): iterable
+    {
+        foreach (['173.245.48.1', '2606:4700:4700::1111'] as $peer) {
+            $cases = [
+                'missing client headers' => [[], null],
+                'empty Cloudflare header' => [['CF-Connecting-IP;'], null],
+                'invalid Cloudflare header' => [['CF-Connecting-IP: invalid'], null],
+                'empty real-IP header' => [['X-Real-IP;'], null],
+                'invalid real-IP header' => [['X-Real-IP: invalid'], null],
+                'empty forwarded chain' => [['X-Forwarded-For;'], null],
+                'invalid forwarded chain' => [['X-Forwarded-For: invalid, also-invalid'], null],
+                'only trusted proxy hops' => [['X-Forwarded-For: 173.245.48.1, ' . $peer], null],
+                'client header names the peer' => [['CF-Connecting-IP: ' . $peer], null],
+                'valid Cloudflare client' => [['CF-Connecting-IP: 8.8.8.8'], '8.8.8.8'],
+                'valid real-IP fallback' => [['CF-Connecting-IP: invalid', 'X-Real-IP: 8.8.8.8'], '8.8.8.8'],
+                'valid forwarded-chain fallback' => [['X-Real-IP: invalid', 'X-Forwarded-For: 8.8.8.8, ' . $peer], '8.8.8.8'],
+            ];
+            if (str_contains($peer, ':')) {
+                $cases['equivalent IPv6 peer address'] = [['CF-Connecting-IP: 2606:4700:4700:0:0:0:0:1111'], null];
+            }
+            foreach ($cases as $name => [$headers, $client]) {
+                foreach ([true, false] as $preset) {
+                    yield $peer . ' ' . $name . ($preset ? ' preset' : ' custom trust') => [$peer, $headers, $client, $preset];
+                }
+            }
+        }
+    }
+
+    #[DataProvider('trustedProxyAttributionCases')]
+    public function testTrustedProxyFallbackDoesNotCreatePersistentBans(string $peer, array $forwardingHeaders, ?string $client, bool $preset): void
+    {
+        $this->configure(['trusted_proxies' => $preset ? '' : $peer . "\n173.245.48.1", 'trusted_proxy_preset' => $preset ? 'cloudflare' : 'none',
+            'enable_filtering' => true, 'enable_reporting' => true, 'sources' => ['local' => true],
+            'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $headers = array_merge(['X-Botwarden-Fixture-Peer: ' . $peer], $forwardingHeaders);
+        $response = self::http('/fixture-report', '8.8.8.8', 'FixtureBrowser', $headers, 'GET', null, false);
+        $this->assertSame(403, $response['status']);
+        $this->assertSame('Forbidden', $response['body']);
+        $expected = $client === null ? [] : [$client];
+        $this->assertSame([$expected, $expected, $expected],
+            [array_column($this->rows('local'), 'ip'), array_column($this->rows('history'), 'ip'),
+                array_column($this->rows('report_queue'), 'ip')],
+            'Only a visitor address, never the unresolved proxy, may be persisted');
+        $this->assertSame($client === null ? 200 : 403,
+            self::http('/', '8.8.8.8', 'FixtureBrowser', $headers, 'GET', null, false)['status']);
+        $this->assertSame(200, self::http('/', '9.9.9.9', 'FixtureBrowser',
+            ['X-Botwarden-Fixture-Peer: ' . $peer, 'CF-Connecting-IP: 9.9.9.9'], 'GET', null, false)['status']);
+        $this->assertSame([], $this->requests());
+    }
+
+    public function testUnresolvedTrustedProxyDoesNotBypassManualBlocks(): void
+    {
+        $this->configure(['trusted_proxies' => '', 'trusted_proxy_preset' => 'cloudflare',
+            'enable_filtering' => true, 'enable_reporting' => true, 'sources' => ['local' => true],
+            'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $this->db->exec("INSERT INTO local (ip, is_manual) VALUES ('173.245.48.1', 1)");
+        $before = $this->rows('local');
+        $response = self::http('/fixture-report', '8.8.8.8', 'FixtureBrowser',
+            ['X-Botwarden-Fixture-Peer: 173.245.48.1'], 'GET', null, false);
+        $this->assertSame(403, $response['status']);
+        $this->assertSame($before, $this->rows('local'));
+        $this->assertSame([], $this->rows('history'));
+        $this->assertSame([], $this->rows('report_queue'));
+    }
+
+    public static function bundledFilterCases(): iterable
+    {
+        foreach (['/.env', '/.env.backup', '/.env.local'] as $path) {
+            yield $path . ' untrusted shared peer' => [$path, 'none', ['X-Forwarded-For: 8.8.8.8'], null];
+            yield $path . ' unresolved trusted peer' => [$path, 'cloudflare', [], null];
+            yield $path . ' attributed direct probe' => [$path, 'cloudflare', ['CF-Connecting-IP: 8.8.8.8'], '8.8.8.8'];
+            yield $path . ' attributed cross-site probe' => [$path, 'cloudflare', ['CF-Connecting-IP: 8.8.8.8', 'Sec-Fetch-Site: cross-site'], null];
+        }
+    }
+
+    #[DataProvider('bundledFilterCases')]
+    public function testBundledEnvironmentFiltersKeepSharedProxyVisitorsIndependent(string $path, string $preset, array $forwardingHeaders, ?string $client): void
+    {
+        $this->configure(['filters' => self::$bundledFilters, 'trusted_proxies' => '',
+            'trusted_proxy_preset' => $preset, 'enable_filtering' => true, 'enable_reporting' => true,
+            'sources' => ['local' => true], 'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $headers = array_merge(['X-Botwarden-Fixture-Peer: 173.245.48.1'], $forwardingHeaders);
+        $probe = self::http($path, '8.8.8.8', 'FixtureBrowser', $headers, 'GET', null, false);
+        $this->assertSame(403, $probe['status']);
+        $this->assertSame('Forbidden', $probe['body']);
+        foreach (['local', 'history', 'report_queue'] as $table) {
+            $this->assertSame($client === null ? [] : [$client], array_column($this->rows($table), 'ip'), $table);
+        }
+        if ($client !== null) $this->assertSame($path, $this->rows('report_queue')[0]['path']);
+        $this->assertSame($client === null ? 200 : 403, self::http('/', '8.8.8.8', 'FixtureBrowser', $headers, 'GET', null, false)['status']);
+        $this->assertSame(200, self::http('/', '9.9.9.9', 'FixtureBrowser',
+            ['X-Botwarden-Fixture-Peer: 173.245.48.1', 'CF-Connecting-IP: 9.9.9.9'])['status']);
+        $this->assertSame([], $this->requests());
+    }
+
+    public static function browserFilterCases(): iterable
+    {
+        foreach (['cross-site', 'same-site', 'same-origin'] as $site) {
+            foreach (['image', 'link'] as $action) yield $site . ' ' . $action => [$site, $action];
+        }
+        yield 'direct navigation' => ['none', 'navigate'];
+    }
+
+    #[DataProvider('browserFilterCases')]
+    public function testBrowserOwnedMetadataProtectsReadersOfEnvironmentProbes(string $site, string $action): void
+    {
+        if (getenv('BOTWARDEN_BROWSER_URL') !== 'http://127.0.0.1:8877') {
+            $this->markTestSkipped('Opt in to the isolated local Chrome fixture.');
+        }
+        $this->configure(['filters' => self::$bundledFilters, 'trusted_proxies' => '', 'trusted_proxy_preset' => 'cloudflare',
+            'enable_filtering' => true, 'enable_reporting' => true, 'sources' => ['local' => true],
+            'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $process = proc_open(['node', __DIR__ . '/fixtures/BrowserProbe.mjs', $site, $action],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $this->assertIsResource($process);
+        $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+        $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+        $this->assertSame(0, proc_close($process), $err . $out);
+        $this->assertSame('', $err);
+        $result = json_decode($out, true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('http://127.0.0.1:8777/.env', $result['url']);
+        $this->assertSame(403, $result['status']);
+        $this->assertSame($site, $result['fetchSite']);
+        $this->assertSame($action === 'image' ? 'no-cors' : 'navigate', $result['fetchMode']);
+        $this->assertSame($action === 'image' ? 'image' : 'document', $result['fetchDest']);
+        $persist = in_array($site, ['none', 'same-origin'], true);
+        foreach (['local', 'history', 'report_queue'] as $table) {
+            $this->assertSame($persist ? ['8.8.8.8'] : [], array_column($this->rows($table), 'ip'), $table);
+        }
+        $this->assertSame($persist ? 403 : 200, self::http('/', '8.8.8.8', 'FixtureBrowser',
+            ['X-Botwarden-Fixture-Peer: 173.245.48.1', 'CF-Connecting-IP: 8.8.8.8'])['status']);
+        $this->assertSame(200, self::http('/', '9.9.9.9', 'FixtureBrowser',
+            ['X-Botwarden-Fixture-Peer: 173.245.48.1', 'CF-Connecting-IP: 9.9.9.9'])['status']);
+        $this->assertSame([], $this->requests());
+        self::$observations[] = ['browser_probe' => $action, 'metadata' => $result];
+    }
+
+    public static function uriFilterProxyCases(): iterable
+    {
+        foreach (['1.1.1.1' => '1.1.1.0/24', '2606:4700:4700::1111' => '2606:4700::/32'] as $peer => $cidr) {
+            foreach (['CF-Connecting-IP', 'X-Forwarded-For', 'X-Real-IP'] as $header) {
+                yield $peer . ' ' . $header . ' empty trust' => [$peer, '', $header, false];
+                yield $peer . ' ' . $header . ' nonmatching trust' => [$peer, '9.9.9.9', $header, false];
+                yield $peer . ' ' . $header . ' trusted CIDR' => [$peer, $cidr, $header, true];
+            }
+            yield $peer . ' direct request' => [$peer, '', null, true];
+        }
+    }
+
+    #[DataProvider('uriFilterProxyCases')]
+    public function testUriFilterDoesNotPersistUntrustedProxyAddresses(string $peer, string $trusted, ?string $header, bool $persist): void
+    {
+        $this->configure(['enable_filtering' => true, 'enable_reporting' => true,
+            'trusted_proxies' => $trusted, 'sources' => ['local' => true],
+            'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $headers = ['X-Botwarden-Fixture-Peer: ' . $peer];
+        if ($header !== null) $headers[] = $header . ': 8.8.8.8';
+        $response = self::http('/fixture-report', '8.8.8.8', 'FixtureBrowser', $headers, 'GET', null, false);
+        $this->assertSame(403, $response['status']);
+        $this->assertSame('Forbidden', $response['body']);
+        foreach (['local', 'history', 'report_queue'] as $table) {
+            $rows = $this->rows($table);
+            $this->assertCount($persist ? 1 : 0, $rows, $table);
+            if ($persist) $this->assertSame($header === null ? $peer : '8.8.8.8', $rows[0]['ip']);
+        }
+        $this->assertSame($persist ? 403 : 200,
+            self::http('/', '8.8.8.8', 'FixtureBrowser', $headers, 'GET', null, false)['status']);
+        $this->assertSame([], $this->requests(), 'URI matches must not report synchronously');
+    }
+
+    public function testUntrustedForwardingHeadersDoNotBypassExistingLocalBlocks(): void
+    {
+        $this->configure(['trusted_proxies' => '', 'sources' => ['local' => true]]);
+        $this->db->exec("INSERT INTO local (ip, is_manual) VALUES ('1.1.1.1', 1)");
+        $this->assertSame(403, self::http('/', '8.8.8.8', 'FixtureBrowser',
+            ['X-Botwarden-Fixture-Peer: 1.1.1.1'])['status']);
+        $this->assertCount(1, $this->rows('local'));
+        $this->assertSame([], $this->rows('report_queue'));
+    }
+
+    public function testCloudflarePresetUsesTheVisitorForUriFilterPersistence(): void
+    {
+        $this->configure(['trusted_proxies' => '', 'trusted_proxy_preset' => 'cloudflare',
+            'enable_filtering' => true, 'enable_reporting' => true, 'sources' => ['local' => true],
+            'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $headers = ['X-Botwarden-Fixture-Peer: 173.245.48.1', 'CF-Connecting-IP: 8.8.8.8'];
+        $this->assertSame(403, self::http('/fixture-report', '8.8.8.8', 'FixtureBrowser', $headers)['status']);
+        foreach (['local', 'history', 'report_queue'] as $table) {
+            $this->assertSame(['8.8.8.8'], array_column($this->rows($table), 'ip'));
+        }
+        $headers[1] = 'CF-Connecting-IP: 9.9.9.9';
+        $this->assertSame(200, self::http('/', '9.9.9.9', 'FixtureBrowser', $headers)['status']);
+        $this->assertSame([], $this->requests());
+    }
+
+    public static function uriFilterFetchSiteCases(): iterable
+    {
+        foreach ([[null, true], ['none', true], ['same-origin', true], ['cross-site', false],
+            ['same-site', false], ['unexpected', false], ['', false], ['same-origin, cross-site', false]] as [$site, $allow]) {
+            foreach ([true, false] as $trusted) {
+                yield ($site ?? 'absent') . ($trusted ? ' trusted proxy' : ' untrusted proxy') => [
+                    $site, $trusted, $trusted && $allow,
+                ];
+            }
+        }
+    }
+
+    #[DataProvider('uriFilterFetchSiteCases')]
+    public function testUriFilterDoesNotPersistCrossSiteRequests(?string $site, bool $trusted, bool $persist): void
+    {
+        $this->configure(['enable_filtering' => true, 'enable_reporting' => true,
+            'trusted_proxies' => $trusted ? '1.1.1.0/24' : '', 'sources' => ['local' => true],
+            'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $headers = ['X-Botwarden-Fixture-Peer: 1.1.1.1'];
+        if ($site !== null) $headers[] = $site === '' ? 'Sec-Fetch-Site;' : 'Sec-Fetch-Site: ' . $site;
+        $response = self::http('/fixture-report', '8.8.8.8', 'FixtureBrowser', $headers);
+        $this->assertSame(403, $response['status']);
+        $this->assertSame('Forbidden', $response['body']);
+        foreach (['local', 'history', 'report_queue'] as $table) {
+            $rows = $this->rows($table);
+            $this->assertCount($persist ? 1 : 0, $rows, $table);
+            if ($persist) $this->assertSame('8.8.8.8', $rows[0]['ip']);
+        }
+        $normal = self::http('/', '8.8.8.8', 'FixtureBrowser', $headers);
+        $this->assertSame($persist ? 403 : 200, $normal['status']);
+        if (!$persist) $this->assertStringContainsString('text/html', $normal['type']);
+        $this->assertSame([], $this->requests());
+    }
+
+    public function testCrossSiteFilteringPreservesDisabledBlacklisting(): void
+    {
+        $this->configure(['enable_filtering' => true, 'enable_blacklisting' => false,
+            'enable_reporting' => true, 'filters' => '^/$',
+            'abuseipdb' => ['api_key' => 'synthetic-fixture-key']]);
+        $response = self::http('/', '8.8.8.8', 'FixtureBrowser', ['Sec-Fetch-Site: cross-site']);
+        $this->assertSame(200, $response['status']);
+        foreach (['local', 'history', 'report_queue'] as $table) $this->assertSame([], $this->rows($table));
+    }
+
+    public function testCrossSiteHeadersDoNotBypassExistingLocalBlocks(): void
+    {
+        $this->configure(['sources' => ['local' => true]]);
+        $this->db->exec("INSERT INTO local (ip, is_manual) VALUES ('8.8.8.8', 1)");
+        $this->assertSame(403, self::http('/', '8.8.8.8', 'FixtureBrowser', ['Sec-Fetch-Site: cross-site'])['status']);
+        $this->assertCount(1, $this->rows('local'));
+        $this->assertSame([], $this->rows('report_queue'));
+    }
+
     public function testReportingQueuesOnlyConfiguredUriEventsWithoutQueryStrings(): void
     {
         $config = ['enable_filtering' => true, 'enable_reporting' => true, 'abuseipdb' => ['api_key' => 'synthetic-fixture-key']];
@@ -500,17 +873,125 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertSame(0, $this->rows('report_queue')[0]['attempts']);
     }
 
-    public function testMaintenanceJobsPruneOnlyExpiredAutomaticData(): void
+    public function testHighCardinalityQuotaSentinelsExpireThroughRegisteredMaintenance(): void
     {
-        $this->db->exec("INSERT INTO local (ip, is_manual, added_at) VALUES ('198.51.100.40', 0, 1), ('198.51.100.41', 1, 1)");
-        $this->db->exec("INSERT INTO history (ip, action, acted_at) VALUES ('198.51.100.40', 'block', 1)");
-        $this->db->exec("INSERT INTO ip_cache (ip, source, decision, expires_at) VALUES ('198.51.100.40', 'crowdsec_lapi', 'clean', 1)");
-        $result = $this->job('botwarden-auto-clean');
+        $config = ['auto_clean' => false, 'sources' => ['local' => true, 'crowdsec' => true],
+            'crowdsec' => ['mode' => 'cti', 'cti_api_key' => 'synthetic-fixture-key', 'cti_cache_ttl' => 3600]];
+        $this->configure($config);
+        $started = time();
+        for ($i = 0; $i < 512; $i++) {
+            $ip = '11.0.' . intdiv($i, 250) . '.' . ($i % 250 + 1);
+            $this->assertSame(200, self::http('/', $ip, 'FixtureBrowser', ['X-Botwarden-Cti-Scenario: rate_limit'])['status'], $ip);
+        }
+        $cache = $this->rows('ip_cache');
+        $this->assertCount(512, $cache);
+        $this->assertSame(['crowdsec_cti'], array_values(array_unique(array_column($cache, 'source'))));
+        $this->assertSame(['clean'], array_values(array_unique(array_column($cache, 'decision'))));
+        $this->assertSame([0], array_values(array_unique(array_column($cache, 'score'))));
+        $this->assertGreaterThanOrEqual($started + 10, min(array_column($cache, 'expires_at')));
+        $this->assertLessThanOrEqual(time() + 10, max(array_column($cache, 'expires_at')));
+        $this->assertSame(['cti'], array_column($this->requests(), 'service'), 'Quota lock must suppress all 511 later provider calls');
+        $quota = $this->db->querySingle("SELECT value FROM metadata WHERE key = 'crowdsec_cti_quota_reset'");
+        $this->assertGreaterThan(time(), (int)$quota);
+
+        // Advance only the synthetic cache clock; avoid waiting for each TTL.
+        $this->db->exec("UPDATE ip_cache SET expires_at = 1");
+        $this->db->exec("INSERT INTO ip_cache (ip, source, decision, expires_at) VALUES ('9.9.9.9', 'crowdsec_cti', 'block', strftime('%s','now') + 3600), ('1.1.1.1', 'crowdsec_lapi', 'clean', strftime('%s','now') + 3600)");
+        $this->db->exec("INSERT INTO local (ip, is_manual, added_at) VALUES ('8.8.8.8', 0, 1), ('9.9.9.9', 1, 1), ('1.1.1.1', 0, strftime('%s','now'))");
+        $this->db->exec("INSERT INTO history (ip, action, acted_at) VALUES ('8.8.8.8', 'block', 1), ('1.1.1.1', 'block', strftime('%s','now'))");
+        $result = self::helper(['operation' => 'job', 'id' => 'botwarden-prune-history', 'config' => $config]);
         $this->assertTrue($result['success']);
-        $this->assertSame(['198.51.100.41'], array_column($this->rows('local'), 'ip'));
-        $this->assertSame([], $this->rows('history'));
-        $this->assertSame([], $this->rows('ip_cache'));
+        $this->assertSame('success', $result['state']);
+        $this->assertSame(['9.9.9.9', '1.1.1.1'], array_column($this->rows('ip_cache'), 'ip'));
+        $this->assertSame(['9.9.9.9', '1.1.1.1'], array_column($this->rows('local'), 'ip'));
+        $this->assertSame(['1.1.1.1'], array_column($this->rows('history'), 'ip'));
+        $this->assertSame($quota, $this->db->querySingle("SELECT value FROM metadata WHERE key = 'crowdsec_cti_quota_reset'"));
+        $before = [$this->rows('ip_cache'), $this->rows('local'), $this->rows('history')];
+        $this->assertTrue(self::helper(['operation' => 'job', 'id' => 'botwarden-prune-history', 'config' => $config])['success']);
+        $this->assertSame($before, [$this->rows('ip_cache'), $this->rows('local'), $this->rows('history')]);
+
+        $this->assertSame(200, self::http('/', '11.4.0.1')['status']);
+        $this->assertCount(1, $this->requests(), 'Maintenance must not prematurely clear the quota lock');
+        $this->db->exec("UPDATE metadata SET value = '1' WHERE key = 'crowdsec_cti_quota_reset'");
+        $this->db->exec("UPDATE ip_cache SET expires_at = 1 WHERE ip = '11.4.0.1'");
+        $this->assertSame(403, self::http('/', '11.4.0.1')['status']);
+        $this->assertCount(2, $this->requests());
+        $recovered = $this->db->querySingle("SELECT decision, score, expires_at FROM ip_cache WHERE ip = '11.4.0.1'", true);
+        $this->assertSame('block', $recovered['decision']);
+        $this->assertSame(4, $recovered['score']);
+        $this->assertGreaterThanOrEqual(time() + 3595, $recovered['expires_at']);
+        $this->assertSame(403, self::http('/', '11.4.0.1')['status']);
+        $this->assertCount(2, $this->requests(), 'Recovered authoritative answer must be cached');
         $this->assertSame('ok', $this->db->querySingle('PRAGMA integrity_check'));
+        self::$observations['quota_spike'] = ['visitors' => 512, 'expired_sentinels_pruned' => 512, 'auto_clean' => false];
+    }
+
+    public static function maintenanceJobs(): iterable
+    {
+        yield 'expiry independent of auto_clean' => ['botwarden-prune-history', false, 86400, ['9.9.9.9', '1.1.1.1']];
+        yield 'zero TTL preserves automatic blocks' => ['botwarden-prune-history', false, 0, ['8.8.8.8', '9.9.9.9', '1.1.1.1']];
+        yield 'optional cleanup still prunes before vacuum' => ['botwarden-auto-clean', true, 86400, ['9.9.9.9', '1.1.1.1']];
+    }
+
+    #[DataProvider('maintenanceJobs')]
+    public function testMaintenanceJobsPruneOnlyExpiredAutomaticData(string $job, bool $autoClean, int $localTtl, array $expectedLocal): void
+    {
+        $config = ['auto_clean' => $autoClean, 'local_ttl' => $localTtl, 'sources' => ['local' => true]];
+        $this->configure($config);
+        $this->db->exec("INSERT INTO local (ip, is_manual, added_at) VALUES ('8.8.8.8', 0, 1), ('9.9.9.9', 1, 1), ('1.1.1.1', 0, strftime('%s', 'now'))");
+        $this->db->exec("INSERT INTO history (ip, action, acted_at) VALUES ('8.8.8.8', 'block', 1), ('1.1.1.1', 'block', strftime('%s', 'now'))");
+        // Expired CTI sentinel, expired LAPI answer, and an unexpired answer.
+        $this->db->exec("INSERT INTO ip_cache (ip, source, decision, expires_at) VALUES ('8.8.8.8', 'crowdsec_cti', 'clean', 1), ('9.9.9.9', 'crowdsec_lapi', 'clean', 1), ('1.1.1.1', 'crowdsec_cti', 'block', strftime('%s', 'now') + 3600)");
+        $result = self::helper(['operation' => 'job', 'id' => $job, 'config' => $config]);
+        $this->assertTrue($result['success']);
+        $this->assertSame(['1.1.1.1'], array_column($this->rows('history'), 'ip'));
+        $this->assertSame($expectedLocal, array_column($this->rows('local'), 'ip'));
+        $this->assertSame(['1.1.1.1'], array_column($this->rows('ip_cache'), 'ip'));
+        $this->assertSame('block', $this->rows('ip_cache')[0]['decision']);
+        $this->assertSame($localTtl === 0 ? 403 : 200, self::http('/', '8.8.8.8')['status']);
+        $this->assertSame(403, self::http('/', '9.9.9.9')['status']);
+        $this->assertSame(403, self::http('/', '1.1.1.1')['status']);
+        $page = self::http('/', '4.4.4.4');
+        $this->assertSame(200, $page['status']);
+        $this->assertStringContainsString('text/html', (string)$page['type']);
+        $this->assertStringContainsString('Synthetic botWarden migration test site.', $page['body']);
+        $before = [$this->rows('local'), $this->rows('history'), $this->rows('ip_cache')];
+        $this->assertTrue(self::helper(['operation' => 'job', 'id' => $job, 'config' => $config])['success']);
+        $this->assertSame($before, [$this->rows('local'), $this->rows('history'), $this->rows('ip_cache')], 'Repeated maintenance must be idempotent');
+        $this->assertSame('ok', $this->db->querySingle('PRAGMA integrity_check'));
+        $this->assertSame([], $this->requests());
+    }
+
+    public function testCliScriptsRejectWebRequestsAndRetainCliPaths(): void
+    {
+        $this->db->exec("INSERT INTO local (ip, is_manual, reason) VALUES ('8.8.8.8', 1, 'Synthetic CLI guard test')");
+        $before = [$this->rows('local'), $this->rows('history'), hash_file('sha256', self::$configPath)];
+        foreach (['unblock', 'migrate'] as $name) {
+            $response = self::http('/__botwarden-fixture/cli/' . $name);
+            $this->assertSame(403, $response['status'], $name);
+            $this->assertStringContainsString('text/plain', (string)$response['type']);
+            $this->assertContains(trim($response['body']), ['', '#!/usr/bin/env php']);
+        }
+        $this->assertSame($before, [$this->rows('local'), $this->rows('history'), hash_file('sha256', self::$configPath)]);
+
+        foreach (['unblock' => ['--list'], 'migrate' => []] as $name => $arguments) {
+            $script = self::$host . '/user/plugins/botwarden/cli/' . $name . '.php';
+            $process = proc_open(array_merge([PHP_BINARY, $script], $arguments),
+                [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::$host);
+            if (!is_resource($process)) throw new \RuntimeException('Cannot run CLI guard regression');
+            fclose($pipes[0]);
+            $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+            $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+            $this->assertSame(0, proc_close($process), $err);
+            $this->assertSame('', $err);
+            if ($name === 'unblock') $this->assertStringContainsString('8.8.8.8', $out);
+            else {
+                $preview = json_decode($out, true, 512, JSON_THROW_ON_ERROR);
+                $this->assertFalse($preview['can_migrate']);
+                $this->assertTrue($preview['migration_complete']);
+            }
+        }
+        $this->assertSame($before, [$this->rows('local'), $this->rows('history'), hash_file('sha256', self::$configPath)]);
     }
 
     public function testWalReadersSeeCompleteListDuringBulkReplacement(): void

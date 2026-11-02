@@ -7,6 +7,38 @@ namespace Grav\Plugin\Botwarden;
  */
 class IpDetector
 {
+    // https://www.cloudflare.com/ips-v4/ and /ips-v6/ — verified 2026-11-01.
+    private const CLOUDFLARE_PROXIES = [
+        '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+        '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+        '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+        '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+        '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+        '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+    ];
+
+    /** Combine custom proxy entries with an explicitly selected preset. */
+    public static function getTrustedProxies(array $config): array
+    {
+        $value = $config['trusted_proxies'] ?? '';
+        $lines = is_array($value) ? $value : explode("\n", (string)$value);
+        $custom = array_filter(array_map('trim', $lines),
+            static fn(string $line): bool => $line !== '' && !str_starts_with($line, '#'));
+        return array_merge($custom,
+            ($config['trusted_proxy_preset'] ?? 'none') === 'cloudflare' ? self::CLOUDFLARE_PROXIES : []);
+    }
+
+    /** Forwarding headers from an untrusted peer must not cause persistent bans. */
+    public static function hasUntrustedForwardingHeaders(array $trustedProxies = []): bool
+    {
+        foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP'] as $header) {
+            if (array_key_exists($header, $_SERVER)) {
+                return !self::isWhitelisted($_SERVER['REMOTE_ADDR'] ?? '', $trustedProxies);
+            }
+        }
+        return false;
+    }
+
     /**
      * Detect the real client IP address.
      *

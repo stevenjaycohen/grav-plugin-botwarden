@@ -23,6 +23,7 @@
         </style>
         <h2>botWarden</h2>
         <p>Application-layer request security and crawler policies. <a id="settings" href="#">Plugin settings</a></p>
+        <p id="proxy-warning" class="warning" role="status" hidden></p>
         <section><h3>Security statistics</h3><div id="stats">Loading…</div></section>
         <section id="legacy-migration" hidden><h3>GRVHulk migration</h3><div id="legacy">Checking…</div><button id="migrate" hidden>Import old settings and data</button></section>
         <section><h3>Local IP blacklist</h3>
@@ -33,8 +34,15 @@
         </section>
         <section><h3>Block history</h3><div id="history">Loading…</div></section>
         <p id="message" role="status" aria-live="polite"></p>`;
-      this.shadowRoot.getElementById('settings').href =
-        (window.__GRAV_ADMIN_BASE || '/admin') + '/plugins/botwarden';
+      const settings = this.shadowRoot.getElementById('settings');
+      const settingsPath = (window.__GRAV_ADMIN_BASE || '/admin') + '/plugins/botwarden';
+      settings.href = settingsPath;
+      settings.addEventListener('click', event => {
+        if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
+          || typeof window.__GRAV_NAVIGATE !== 'function') return;
+        event.preventDefault();
+        window.__GRAV_NAVIGATE(settingsPath);
+      });
       this.shadowRoot.getElementById('migrate').addEventListener('click', () => this.migrate());
       this.shadowRoot.getElementById('block').addEventListener('click', () => this.updateBlock(true));
       this.shadowRoot.getElementById('unblock').addEventListener('click', () => this.updateBlock(false));
@@ -52,6 +60,9 @@
         ]);
         this.shadowRoot.getElementById('stats').textContent =
           `Local: ${stats.local_count}; historical events: ${stats.history_count}; AbuseIPDB: ${stats.abuseipdb_bulk_count}; Known Agents: ${stats.dark_visitors_count}`;
+        const proxyWarning = this.shadowRoot.getElementById('proxy-warning');
+        proxyWarning.textContent = stats.proxy_warning || '';
+        proxyWarning.hidden = !stats.proxy_warning;
         this.shadowRoot.getElementById('legacy-migration').hidden = !!legacy.migration_complete;
         this.shadowRoot.getElementById('legacy').textContent = legacy.detected
           ? (legacy.can_migrate
@@ -59,8 +70,8 @@
             : 'GRVHulk artifacts found, but existing botWarden data or missing readable sources prevent automatic migration.')
           : 'No older GRVHulk installation detected.';
         this.shadowRoot.getElementById('migrate').hidden = !legacy.can_migrate;
-        this.table('blocks', ['IP','Reason','Added'], blocks.entries || [], ['ip','reason','added_at']);
-        this.table('history', ['IP','Action','Reason','Time'], history.entries || [], ['ip','action','reason','acted_at']);
+        this.table('blocks', ['IP','Reason','Added (local time)'], blocks.entries || [], ['ip','reason','added_at']);
+        this.table('history', ['IP','Action','Reason','Time (local time)'], history.entries || [], ['ip','action','reason','acted_at']);
         this.shadowRoot.getElementById('prev').disabled = !this.offset;
         this.shadowRoot.getElementById('next').disabled = (this.offset || 0)+50 >= blocks.total;
       } catch (e) { this.message('Unable to load botWarden: ' + e.message, true); }
@@ -69,7 +80,8 @@
       this.shadowRoot.getElementById(id).innerHTML = entries.length
         ? '<table><thead><tr>' + headings.map(x => '<th>' + this.esc(x) + '</th>').join('') +
           '</tr></thead><tbody>' + entries.map(row => '<tr>' + keys.map(key =>
-            '<td>' + this.esc(row[key]) + '</td>').join('') + '</tr>').join('') + '</tbody></table>'
+            '<td>' + this.esc((key === 'added_at' || key === 'acted_at') && row[key] != null
+              ? new Date(Number(row[key]) * 1000).toLocaleString() : row[key]) + '</td>').join('') + '</tr>').join('') + '</tbody></table>'
         : '<p>No entries.</p>';
     }
     message(text, isError=false) {

@@ -1,7 +1,7 @@
 name: botWarden
 slug: botwarden
 type: plugin
-version: 1.2.4
+version: 1.2.5
 description: "Advanced IP security for Grav 2: local blacklist, AbuseIPDB, CrowdSec CTI/LAPI, AI crawler blocking via Known Agents, CIDR whitelist, URI filtering."
 icon: shield
 author:
@@ -100,10 +100,19 @@ form:
       rows: 6
       placeholder: "127.0.0.1\n::1\n# 192.168.0.0/24"
 
+    trusted_proxy_preset:
+      type: select
+      label: Trusted Proxy Preset
+      help: "Explicitly trust a provider's published proxy ranges in addition to the custom entries below. Select Cloudflare only when this site uses Cloudflare. Bundled ranges were verified on 2026-11-01; compare them with https://www.cloudflare.com/ips/ when reviewing updates."
+      default: none
+      options:
+        none: None
+        cloudflare: Cloudflare (IPv4 and IPv6)
+
     trusted_proxies:
       type: textarea
       label: Trusted Proxies (IPs / CIDRs)
-      help: "Reverse-proxy/CDN IPs allowed to set client-IP headers (CF-Connecting-IP, X-Real-IP, X-Forwarded-For). One IP or CIDR per line. Leave empty to trust only the direct connection (REMOTE_ADDR). Set this when behind Cloudflare, nginx, or a load balancer — otherwise client IPs can be spoofed."
+      help: "Additional reverse-proxy/CDN IPs allowed to set client-IP headers (CF-Connecting-IP, X-Real-IP, X-Forwarded-For). One IP or CIDR per line. With no entries or preset, forwarding headers are ignored and REMOTE_ADDR is used. Configure this or select the appropriate preset behind a proxy so visitors are not mistaken for its shared address."
       rows: 4
       placeholder: "# Cloudflare ranges, e.g.\n# 173.245.48.0/20\n# 103.21.244.0/22"
 
@@ -178,7 +187,7 @@ form:
       text: "Sign up at https://www.abuseipdb.com/ for a free API key."
 
     abuseipdb.api_key:
-      type: text
+      type: password
       label: AbuseIPDB API Key
       placeholder: your_api_key_here
       help: Required for AbuseIPDB bulk list and reporting
@@ -210,7 +219,7 @@ form:
         lapi: "LAPI – Self-hosted CrowdSec agent"
 
     crowdsec.cti_api_key:
-      type: text
+      type: password
       label: CrowdSec CTI API Key
       placeholder: your_cti_api_key
       help: "Obtain from https://app.crowdsec.net/ → Console → CTI API Keys"
@@ -241,7 +250,7 @@ form:
       help: Base URL of your CrowdSec Local API agent
 
     crowdsec.lapi_api_key:
-      type: text
+      type: password
       label: LAPI API Key
       placeholder: your_bouncer_api_key
       help: "Generate with: cscli bouncers add hulk-bouncer"
@@ -264,7 +273,7 @@ form:
       text: "AI crawler blocking and optional visit reporting — https://www.knownagents.com/"
 
     dark_visitors.api_key:
-      type: text
+      type: password
       label: Known Agents Project Access Token
       placeholder: your_api_key_here
       help: "Copy the access token from your Known Agents project's Settings page and save. Enable Report Visits to Known Agents to send traffic to the project, then check its Realtime timeline and connection status. Crawler rules use this token too."

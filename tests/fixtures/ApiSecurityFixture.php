@@ -73,7 +73,7 @@ if ($operation === 'setup') {
         $sessionPath = $grav['config']->get('system.session.options.save_path');
         if (realpath($sessionPath) !== realpath(dirname($work) . '/sessions')) throw new RuntimeException('Session storage must remain in the fixture');
         $sessionName = 'grav-site-' . substr(md5(GRAV_ROOT), 0, 7);
-        foreach (['valid' => true, 'pending_two_factor' => false, 'logout' => true] as $label => $authorized) {
+        foreach (['valid' => true, 'pending_two_factor' => false, 'logout' => true, 'management' => true] as $label => $authorized) {
             $sessionUser = clone $user;
             $sessionUser->set('authenticated', true);
             $sessionUser->set('authorized', $authorized);

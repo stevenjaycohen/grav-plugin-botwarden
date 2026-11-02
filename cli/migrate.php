@@ -1,5 +1,10 @@
 #!/usr/bin/env php
 <?php
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    exit;
+}
+
 /**
  * botWarden GRVHulk migration. Preview by default; --confirm actually imports.
  * Usage from Grav root:
