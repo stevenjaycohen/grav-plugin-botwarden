@@ -23,6 +23,18 @@ final class LegacyMigration
             && (!$found['config_present'] || $found['config_readable'])
             && (!$found['database_present'] || $found['database_readable'])
             && !$found['new_config_exists'] && !$found['new_database_exists'];
+        $found['recovery'] = [];
+        if ($found['detected'] && !$found['migration_complete'] && !$found['can_migrate']) {
+            $found['recovery'][] = 'Request blocking is deferred while legacy artifacts remain without a completed migration. Disabling GRVHulk alone does not complete migration.';
+            if ($found['new_config_exists'] || $found['new_database_exists']) {
+                $found['recovery'][] = 'Back up both plugins configuration and SQLite data (use SQLite backup for WAL databases). Existing botWarden destinations are never overwritten.';
+                $found['recovery'][] = 'Compare and deliberately merge existing settings/data, or move only the backed-up botWarden destinations aside before using the normal importer. Do not create a completion marker manually.';
+            }
+            if (!$found['migratable'] || ($found['config_present'] && !$found['config_readable']) || ($found['database_present'] && !$found['database_readable'])) {
+                $found['recovery'][] = 'Restore readable legacy sources before retrying. A readable configuration-only or database-only source can be imported when the destinations are empty.';
+            }
+            $found['recovery'][] = 'After successful import, verify counts and settings, disable GRVHulk, then enable botWarden. Retain original files and backups for rollback; remove legacy artifacts only after deliberate review.';
+        }
         return $found;
     }
 

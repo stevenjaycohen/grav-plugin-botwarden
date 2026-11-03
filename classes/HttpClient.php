@@ -26,8 +26,17 @@ final class HttpClient
             throw new \RuntimeException('Could not initialize HTTP request');
         }
         try {
+            $responseBody = '';
+            $oversized = false;
             $options = [
-                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use (&$responseBody, &$oversized): int {
+                    if (strlen($responseBody) + strlen($chunk) > 32 * 1024 * 1024) {
+                        $oversized = true;
+                        return 0;
+                    }
+                    $responseBody .= $chunk;
+                    return strlen($chunk);
+                },
                 CURLOPT_FOLLOWLOCATION => false,
                 CURLOPT_CONNECTTIMEOUT => min(5, $timeout),
                 CURLOPT_TIMEOUT => $timeout,
@@ -41,13 +50,13 @@ final class HttpClient
             curl_setopt_array($handle, $options);
             $response = curl_exec($handle);
             $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+            if ($oversized) {
+                throw new \RuntimeException('HTTP response exceeds 32 MiB limit');
+            }
             if ($response === false) {
                 throw new \RuntimeException('HTTP transport error (' . curl_errno($handle) . ')');
             }
-            if (strlen($response) > 32 * 1024 * 1024) {
-                throw new \RuntimeException('HTTP response exceeds 32 MiB limit');
-            }
-            return ['status' => $status, 'body' => $response];
+            return ['status' => $status, 'body' => $responseBody];
         } finally {
             curl_close($handle);
         }

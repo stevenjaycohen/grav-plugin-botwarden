@@ -46,10 +46,59 @@ final class RobotsTxtManager
     /** Returns the previous and new hashes for diagnostics. */
     public static function publish(string $path, array $userAgents, string $backupDirectory): array
     {
+        return self::update($path, $userAgents, $backupDirectory);
+    }
+
+    public static function withdrawalPreview(string $path): array
+    {
         if (is_link($path)) throw new \RuntimeException('Refusing to follow robots.txt symlink');
         $original = is_file($path) ? file_get_contents($path) : '';
         if ($original === false) throw new \RuntimeException('Cannot read robots.txt');
-        $updated = self::render($original, $userAgents);
+        return ['sha256' => hash('sha256', $original), 'content' => self::withoutPolicy($original)];
+    }
+
+    private static function withoutPolicy(string $original): string
+    {
+        self::render($original, ['ValidationOnly']);
+        $start = strpos($original, self::START);
+        if ($start === false) return $original;
+        $end = strpos($original, self::END, $start) + strlen(self::END);
+        return substr($original, 0, $start) . substr($original, $end);
+    }
+
+    public static function withdraw(string $path, string $backupDirectory, string $expectedHash): array
+    {
+        return self::update($path, [], $backupDirectory, $expectedHash);
+    }
+
+    private static function update(string $path, array $userAgents, string $backupDirectory, ?string $expectedHash = null): array
+    {
+        if (is_link($path)) throw new \RuntimeException('Refusing to follow robots.txt symlink');
+        $preflight = is_file($path) ? file_get_contents($path) : '';
+        if ($preflight === false) throw new \RuntimeException('Cannot read robots.txt');
+        $preview = $expectedHash === null ? self::render($preflight, $userAgents) : self::withoutPolicy($preflight);
+        if ($preview === $preflight && ($expectedHash === null || hash_equals(hash('sha256', $preflight), $expectedHash))) {
+            return ['changed' => false, 'sha256' => hash('sha256', $preflight)];
+        }
+        if (!is_dir($backupDirectory) && !mkdir($backupDirectory, 0700, true) && !is_dir($backupDirectory)) {
+            throw new \RuntimeException('Cannot create backup directory');
+        }
+        $lockPath = $backupDirectory . '/.robots.lock';
+        if (is_link($lockPath)) throw new \RuntimeException('Refusing a lock symlink');
+        $lock = fopen($lockPath, 'c');
+        if ($lock === false) throw new \RuntimeException('Cannot open robots.txt lock');
+        try {
+        $deadline = microtime(true) + 2;
+        while (!flock($lock, LOCK_EX | LOCK_NB)) {
+            if (microtime(true) >= $deadline) throw new \RuntimeException('robots.txt publication is busy; retry later');
+            usleep(10000);
+        }
+        $original = is_file($path) ? file_get_contents($path) : '';
+        if ($original === false) throw new \RuntimeException('Cannot read robots.txt');
+        if ($expectedHash !== null && !hash_equals(hash('sha256', $original), $expectedHash)) {
+            throw new \RuntimeException('robots.txt changed since preview; preview again');
+        }
+        $updated = $expectedHash === null ? self::render($original, $userAgents) : self::withoutPolicy($original);
         if (hash_equals(hash('sha256', $original), hash('sha256', $updated))) {
             return ['changed' => false, 'sha256' => hash('sha256', $updated)];
         }
@@ -69,10 +118,18 @@ final class RobotsTxtManager
             }
             if (file_exists($path)) @chmod($temp, fileperms($path) & 0777);
             else @chmod($temp, 0644);
+            $current = is_file($path) ? file_get_contents($path) : '';
+            if (is_link($path) || $current !== $original) {
+                throw new \RuntimeException('robots.txt changed during publication; owner changes preserved');
+            }
             if (!rename($temp, $path)) throw new \RuntimeException('Atomic rename failed');
         } finally {
             if (file_exists($temp)) @unlink($temp);
         }
         return ['changed' => true, 'sha256' => hash('sha256', $updated)];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 }

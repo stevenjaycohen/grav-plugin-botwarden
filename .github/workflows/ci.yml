@@ -115,6 +115,30 @@ jobs:
             exit 1
           fi
 
+      - name: Run localhost authorization, service and browser regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          composer install --prefer-dist --no-interaction --no-progress
+          mkdir -p "$PWD/vendor/.botwarden-migration"
+          mv "$GRAV_DIR" "$PWD/vendor/.botwarden-migration/grav"
+          grav_root="$PWD/vendor/.botwarden-migration/grav"
+          php tests/fixtures/PrepareIntegration.php
+          GRAV_ENVIRONMENT=migration-test php -d opcache.enable=0 -S 127.0.0.1:8777 -t "$grav_root" "$PWD/tests/fixtures/KnownAgentsTransport.php" > "$RUNNER_TEMP/grav-integration.log" 2>&1 &
+          grav_pid=$!
+          php -d opcache.enable=0 -S 127.0.0.1:8778 "$PWD/tests/fixtures/ServiceFixture.php" > "$RUNNER_TEMP/providers.log" 2>&1 &
+          provider_pid=$!
+          chrome=$(command -v google-chrome || command -v chromium || true)
+          test -n "$chrome" || { echo "A preinstalled Chrome/Chromium is required for browser regressions"; exit 1; }
+          "$chrome" --headless=new --no-sandbox --disable-gpu --disable-background-networking --disable-component-update --disable-sync --no-first-run --host-resolver-rules='MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1' --remote-debugging-address=127.0.0.1 --remote-debugging-port=8877 --user-data-dir="$PWD/vendor/.botwarden-migration/chrome" about:blank > "$RUNNER_TEMP/browser.log" 2>&1 &
+          browser_pid=$!
+          trap 'kill "$grav_pid" "$provider_pid" "$browser_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8777/ -o /dev/null && curl -fsS --max-time 2 http://127.0.0.1:8877/json/version -o /dev/null; then break; fi
+            sleep 1
+          done
+          BOTWARDEN_TEST_URL=http://127.0.0.1:8777 BOTWARDEN_BROWSER_URL=http://127.0.0.1:8877 TMPDIR="$PWD/vendor/.botwarden-migration/tmp" php -d sys_temp_dir="$PWD/vendor/.botwarden-migration/tmp" vendor/bin/phpunit --do-not-cache-result --fail-on-warning --display-warnings --display-errors
+
   release:
     name: Publish tagged release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')

@@ -31,7 +31,7 @@ namespace {
     if (PHP_SAPI === 'cli-server') {
         header('Content-Type: application/json');
         $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found)(?:/v1/decisions)?$~', $path, $match)) {
+        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found|oversized)(?:/v1/decisions)?$~', $path, $match)) {
             http_response_code(404);
             echo '{}';
             return;
@@ -48,6 +48,14 @@ namespace {
         if (in_array($scenario, ['unauthorized', 'server_error', 'rate_limit', 'not_found'], true)) {
             http_response_code(['unauthorized' => 401, 'server_error' => 503, 'rate_limit' => 429, 'not_found' => 404][$scenario]);
             echo '{"error":"synthetic upstream failure"}';
+            return;
+        }
+        if ($scenario === 'oversized') {
+            header('Content-Type: text/plain');
+            for ($i = 0; $i < 34; $i++) {
+                echo str_repeat('x', 1024 * 1024); flush();
+                if (connection_aborted()) break;
+            }
             return;
         }
         if ($scenario === 'empty') { echo ''; return; }
@@ -126,6 +134,29 @@ namespace {
             }
         })();
         $result = ['count' => Grav\Plugin\Botwarden\BotwardenDatabase::replaceBulkList($db, $ips)];
+    } elseif ($operation === 'lookup-race') {
+        $db = Grav\Plugin\Botwarden\BotwardenDatabase::getInstance($host . '/user/data/botwarden');
+        $cached = Grav\Plugin\Botwarden\BotwardenDatabase::getCachedDecision($db, '8.8.8.8', 'crowdsec_cti');
+        file_put_contents($work . '/race-' . (int)$input['worker'] . '.ready', 'ready');
+        $deadline = microtime(true) + 10;
+        while (!is_file($work . '/race.go')) {
+            if (microtime(true) >= $deadline) throw new RuntimeException('Race barrier timed out');
+            usleep(10000);
+        }
+        if ($cached === null) {
+            if (!empty($input['legacy'])) {
+                // The pre-fix read/upsert sequence, retained only for reproduction.
+                Grav\Plugin\Botwarden\BotwardenDatabase::setCachedDecision($db, '8.8.8.8', 'crowdsec_cti', 'clean', 0, 10);
+                $claim = 'legacy';
+            } else {
+                $claim = Grav\Plugin\Botwarden\BotwardenDatabase::claimDecision($db, '8.8.8.8', 'crowdsec_cti');
+            }
+            if ($claim !== null) {
+                $answer = (new Grav\Plugin\Botwarden\CrowdSecClient(['cti_api_key' => 'synthetic-fixture-key'], $db))->checkIp('8.8.8.8');
+                if (empty($input['legacy'])) Grav\Plugin\Botwarden\BotwardenDatabase::finishDecision($db, '8.8.8.8', 'crowdsec_cti', $claim, $answer['decision'], $answer['score'], 3600);
+            }
+        }
+        $result = ['complete' => true];
     } elseif ($operation === 'visit') {
         $client = new Grav\Plugin\Botwarden\DarkVisitorsClient('synthetic-fixture-key');
         $client->reportVisit(Grav\Plugin\Botwarden\DarkVisitorsClient::visit([

@@ -81,6 +81,19 @@ class IpDetectorTest extends TestCase
         $this->assertFalse(IpDetector::isWhitelisted('203.0.113.46', ['203.0.113.45/32']));
     }
 
+    public function testMalformedPrefixesNeverMatchEitherAddressFamily(): void
+    {
+        foreach (['oops', '', '24junk', '2.5', '-1', '+1', '33', '99999999999999999999'] as $bits) {
+            $this->assertFalse(IpDetector::isWhitelisted('8.8.8.8', ['0.0.0.0/' . $bits]), $bits);
+        }
+        foreach (['oops', '', '64junk', '2.5', '-1', '+1', '129'] as $bits) {
+            $this->assertFalse(IpDetector::isWhitelisted('2001:db8::1', ['::/' . $bits]), $bits);
+        }
+        $this->assertTrue(IpDetector::isWhitelisted('2001:db8::1', ['::/0']));
+        $this->assertTrue(IpDetector::isWhitelisted('8.8.8.8', ['8.8.8.8/32']));
+        $this->assertTrue(IpDetector::isWhitelisted('2001:db8::1', ['2001:db8::1/128']));
+    }
+
     public function testCidrSlashZeroMatchesAll(): void
     {
         $this->assertTrue(IpDetector::isWhitelisted('1.2.3.4', ['0.0.0.0/0']));

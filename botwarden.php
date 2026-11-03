@@ -27,6 +27,8 @@ use SQLite3;
  */
 class BotwardenPlugin extends Plugin
 {
+    public $features = ['blueprints' => 0];
+
     private static ?SQLite3 $dbInstance = null;
 
     public static function getSubscribedEvents(): array
@@ -80,9 +82,30 @@ class BotwardenPlugin extends Plugin
             $visit = DarkVisitorsClient::visit($_SERVER, headers_list(), http_response_code() ?: 200,
                 (microtime(true) - $started) * 1000);
             (new DarkVisitorsClient(trim((string)$config['dark_visitors']['api_key'])))->reportVisit($visit);
+            $this->recordVisitOutcome(true);
         } catch (\Throwable $error) {
+            $this->recordVisitOutcome(false);
             // Reporting failures must never change the visitor's response.
             $this->grav['log']->warning('[botWarden] Known Agents visit reporting failed: ' . $error->getMessage());
+        }
+    }
+
+    private function recordVisitOutcome(bool $accepted): void
+    {
+        try {
+            $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
+            // Diagnostics must not create a destination that prevents a legacy import.
+            if (!is_file($dataDir . '/botwarden.sqlite')) return;
+            $db = BotwardenDatabase::getInstance($dataDir);
+            $db->busyTimeout(0);
+            try {
+                BotwardenDatabase::incrementMeta($db, $accepted ? 'visits_accepted' : 'visits_failed');
+                BotwardenDatabase::setMeta($db, 'visits_last_attempt', (string)time());
+            } finally {
+                $db->busyTimeout(5000);
+            }
+        } catch (\Throwable $error) {
+            $this->grav['log']->warning('[botWarden] Visit delivery diagnostics could not be saved');
         }
     }
 
@@ -190,20 +213,16 @@ class BotwardenPlugin extends Plugin
                     if ($hasKey) {
                         $cached = BotwardenDatabase::getCachedDecision($db, $ip, $source);
                         if ($cached === null) {
-                            // Single-flight: a brief sentinel stops concurrent FPM
-                            // workers from all calling the API at once and burning
-                            // the CTI free-tier quota (50/day).
-                            BotwardenDatabase::setCachedDecision($db, $ip, $source, 'clean', 0, 10);
-                            $client = new CrowdSecClient($config['crowdsec'], $db);
-                            $result = $client->checkIp($ip);
-                            // Cache only authoritative results; a fail-open "clean"
-                            // from a quota lock or network error must not pin a bad
-                            // IP as clean for the full TTL (it keeps the 10s sentinel
-                            // and is retried shortly).
-                            if (!empty($result['cacheable'])) {
-                                BotwardenDatabase::setCachedDecision($db, $ip, $source, $result['decision'], $result['score'], $ttl);
+                            $claim = BotwardenDatabase::claimDecision($db, $ip, $source);
+                            if ($claim !== null) {
+                                $client = new CrowdSecClient($config['crowdsec'], $db);
+                                $result = $client->checkIp($ip);
+                                BotwardenDatabase::finishDecision($db, $ip, $source, $claim,
+                                    $result['decision'], $result['score'], !empty($result['cacheable']) ? $ttl : 10);
+                                $cached = $result;
+                            } else {
+                                $cached = BotwardenDatabase::getCachedDecision($db, $ip, $source);
                             }
-                            $cached = $result;
                         }
                         if (($cached['decision'] ?? 'clean') === 'block') {
                             if ($config['logging'] ?? false) {
@@ -222,10 +241,12 @@ class BotwardenPlugin extends Plugin
                 // Cap the subject length to bound regex backtracking (ReDoS) on the
                 // request hot path; real probe paths are short.
                 $subject = substr($uri, 0, 2048);
+                $diagnosticPath = self::diagnosticPath($uri);
                 foreach ($this->parseLineList($config['filters'] ?? '') as $filter) {
                     // Escape the delimiter so patterns containing '~' don't break the regex.
                     $pattern = '~' . str_replace('~', '\~', $filter) . '~i';
-                    $match   = preg_match($pattern, $subject);
+                    // Compile errors are handled below without PHP warnings to visitors.
+                    $match   = @preg_match($pattern, $subject);
                     if ($match === false) {
                         $err = preg_last_error();
                         if ($err === PREG_BACKTRACK_LIMIT_ERROR || $err === PREG_RECURSION_LIMIT_ERROR) {
@@ -234,7 +255,7 @@ class BotwardenPlugin extends Plugin
                             // bypass the filter. (Malformed patterns instead surface
                             // as PREG_NO_ERROR/INTERNAL and are skipped below.)
                             if ($config['logging'] ?? false) {
-                                $this->grav['log']->error("[Warden] Regex runtime error (code {$err}) on filter '{$filter}' — failing closed: {$uri}");
+                                $this->grav['log']->error("[Warden] Regex runtime error (code {$err}) on filter '{$filter}' — failing closed: {$diagnosticPath}");
                             }
                             if ($config['enable_blacklisting'] ?? true) {
                                 $this->rejectRequest($request);
@@ -249,7 +270,7 @@ class BotwardenPlugin extends Plugin
                     }
                     if ($match === 1) {
                         if ($config['logging'] ?? false) {
-                            $this->grav['log']->debug("[Warden] URI matched filter '{$filter}': {$uri}");
+                            $this->grav['log']->debug("[Warden] URI matched filter '{$filter}': {$diagnosticPath}");
                         }
                         // Block unresolved proxy requests without banning or
                         // reporting the shared peer, including equivalent IPv6 forms.
@@ -390,6 +411,8 @@ class BotwardenPlugin extends Plugin
         $routes->get('/botwarden/history', [$controller, 'history']);
         $routes->post('/botwarden/blocks', [$controller, 'addBlock']);
         $routes->post('/botwarden/unblock', [$controller, 'removeBlock']);
+        $routes->post('/botwarden/refresh', [$controller, 'refreshIntegration']);
+        $routes->post('/botwarden/robots/withdraw', [$controller, 'withdrawRobots']);
     }
 
     public function onApiSidebarItems(Event $event): void
@@ -456,7 +479,7 @@ class BotwardenPlugin extends Plugin
         if ((!empty($config['sources']['dark_visitors']) || !empty($config['robots_txt']['enabled'])) && !empty($config['dark_visitors']['api_key'])) {
             $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskUpdateDarkVisitors', [], 'botwarden-dark-visitors');
             $job->backlink('plugins/botwarden');
-            $job->at('0 3 * * *');
+            $job->at('*/5 * * * *');
         }
 
         if (!empty($config['enable_reporting']) && !empty($config['abuseipdb']['api_key'])) {
@@ -511,6 +534,7 @@ class BotwardenPlugin extends Plugin
         $historyTtl = (int)($config['history_ttl'] ?? 2592000);
         $historyMax = (int)($config['history_max_rows'] ?? 50000);
         $pruned     = BotwardenDatabase::pruneHistory($db, $historyTtl, $historyMax);
+        BotwardenDatabase::expireReports($db);
 
         echo "Warden: pruned {$pruned} history rows (ttl:{$historyTtl}s, max:{$historyMax}), {$expired} expired local entries (ttl:{$localTtl}s) and expired cache entries.\n";
     }
@@ -534,9 +558,11 @@ class BotwardenPlugin extends Plugin
             $ips   = $client->fetchBulkBlacklist($limit);
             $count = BotwardenDatabase::replaceBulkList($db, $ips);
             BotwardenDatabase::setMeta($db, 'abuseipdb_bulk_updated', (string)time());
+            BotwardenDatabase::setMeta($db, 'abuseipdb_bulk_error', '');
             BotwardenDatabase::setMeta($db, 'abuseipdb_bulk_count', (string)$count);
             echo "Warden: AbuseIPDB bulk updated ({$count} IPs).\n";
         } catch (\Throwable $e) {
+            BotwardenDatabase::setMeta($db, 'abuseipdb_bulk_error', 'Refresh failed; check scheduler output and credentials');
             echo "Warden: AbuseIPDB bulk update failed: " . $e->getMessage() . "\n";
             throw $e;
         }
@@ -554,6 +580,18 @@ class BotwardenPlugin extends Plugin
 
         $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
         $db      = BotwardenDatabase::getInstance($dataDir);
+        $last = (int)(BotwardenDatabase::getMeta($db, 'dark_visitors_updated') ?? 0);
+        $ttl = max(3600, (int)($config['dark_visitors']['cache_ttl'] ?? 86400));
+        if ($last > time() - $ttl) {
+            if (!empty($config['robots_txt']['enabled'])) {
+                $rows = $db->query('SELECT user_agent FROM dark_visitors_agents ORDER BY user_agent');
+                $agents = [];
+                while ($row = $rows->fetchArray(SQLITE3_ASSOC)) $agents[] = $row['user_agent'];
+                \Grav\Plugin\Botwarden\RobotsTxtManager::publish(GRAV_ROOT . '/robots.txt', $agents, $dataDir . '/backups');
+            }
+            echo "Warden: Known Agents list is fresh; no download needed.\n";
+            return;
+        }
         $client  = new DarkVisitorsClient($config['dark_visitors']['api_key']);
         $types   = self::normalizeAgentTypes($config['dark_visitors']['agent_types'] ?? []);
 
@@ -572,9 +610,11 @@ class BotwardenPlugin extends Plugin
                 );
             }
             BotwardenDatabase::setMeta($db, 'dark_visitors_updated', (string)time());
+            BotwardenDatabase::setMeta($db, 'dark_visitors_error', '');
             $count = count($agents);
             echo "Warden: Known Agents list updated ({$count} user-agents).\n";
         } catch (\Throwable $e) {
+            BotwardenDatabase::setMeta($db, 'dark_visitors_error', 'Refresh failed; check scheduler output and credentials');
             echo "Warden: Known Agents update failed: " . $e->getMessage() . "\n";
             throw $e;
         }
@@ -599,22 +639,39 @@ class BotwardenPlugin extends Plugin
         $db      = BotwardenDatabase::getInstance($dataDir);
         $client  = new AbuseIpDbClient($config['abuseipdb']);
 
+        $expired = BotwardenDatabase::expireReports($db);
+        if ((int)BotwardenDatabase::getMeta($db, 'reports_retry_after') > time()) {
+            echo "Warden: AbuseIPDB reports are in backoff.\n";
+            return;
+        }
+        $deadline = microtime(true) + 20;
         $sent = 0;
         $failed = 0;
         foreach (BotwardenDatabase::getPendingReports($db, 200) as $report) {
-            if ($client->reportIp($report['ip'], $report['path'])) {
+            $remaining = (int)floor($deadline - microtime(true));
+            if ($remaining < 1) break;
+            if ($client->reportIp($report['ip'], $report['path'], 21, min(3, $remaining))) {
                 BotwardenDatabase::deleteReport($db, (int)$report['id']);
+                BotwardenDatabase::incrementMeta($db, 'reports_sent');
                 $sent++;
             } else {
-                // Keep the row for a later retry (dropped after maxAttempts).
                 BotwardenDatabase::failReport($db, (int)$report['id']);
+                BotwardenDatabase::incrementMeta($db, 'reports_failed');
+                $delay = $client->lastReportStatus === 429 ? 3600 : 300;
+                BotwardenDatabase::setMeta($db, 'reports_retry_after', (string)(time() + $delay));
                 $failed++;
+                break;
             }
         }
 
-        echo "Warden: flushed {$sent} queued AbuseIPDB report(s), {$failed} deferred.\n";
+        echo "Warden: flushed {$sent} queued AbuseIPDB report(s), {$failed} deferred, {$expired} expired.\n";
         if ($failed > 0) {
             throw new \RuntimeException("AbuseIPDB report flush failed for {$failed} report(s)");
         }
+    }
+
+    private static function diagnosticPath(string $uri): string
+    {
+        return preg_replace('/[\x00-\x1f\x7f]/', '', explode('?', $uri, 2)[0]) ?? '';
     }
 }

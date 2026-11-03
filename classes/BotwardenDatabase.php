@@ -173,6 +173,7 @@ class BotwardenDatabase
 
     public static function addIpToLocal(SQLite3 $db, string $ip, string $reason = '', bool $manual = false): void
     {
+        $existing = $manual ? self::searchLocal($db, $ip) : null;
         // Insert if new. INSERT OR IGNORE never demotes an existing manual entry
         // to auto (an auto add over a manual entry is a no-op). Done as two
         // statements rather than an UPSERT, which would require SQLite 3.24+.
@@ -196,6 +197,8 @@ class BotwardenDatabase
         // Record only new blocks to avoid flooding history with repeated auto-hits.
         if ($inserted) {
             self::addHistoryEntry($db, $ip, 'block', $reason, $manual);
+        } elseif ($manual && $existing && (!(bool)$existing['is_manual'] || $existing['reason'] !== $reason)) {
+            self::addHistoryEntry($db, $ip, $existing['is_manual'] ? 'edit' : 'promote', $reason, true);
         }
     }
 
@@ -391,6 +394,37 @@ class BotwardenDatabase
 
     // --- IP cache (AbuseIPDB live + CrowdSec) ---
 
+    /** Claim a missing decision while holding only a short SQLite write lock. */
+    public static function claimDecision(SQLite3 $db, string $ip, string $source): ?string
+    {
+        $db->exec('BEGIN IMMEDIATE');
+        try {
+            if (self::getCachedDecision($db, $ip, $source) !== null) {
+                $db->exec('COMMIT');
+                return null;
+            }
+            $claim = 'pending:' . bin2hex(random_bytes(16));
+            self::setCachedDecision($db, $ip, $source, $claim, 0, 10);
+            $db->exec('COMMIT');
+            return $claim;
+        } catch (\Throwable $error) {
+            $db->exec('ROLLBACK');
+            throw $error;
+        }
+    }
+
+    /** A late lookup cannot overwrite a newer worker's decision. */
+    public static function finishDecision(SQLite3 $db, string $ip, string $source, string $claim, string $decision, int $score, int $ttl): void
+    {
+        $stmt = $db->prepare('UPDATE ip_cache SET decision = :decision, score = :score, expires_at = :expires WHERE ip = :ip AND source = :source AND decision = :claim');
+        foreach ([':ip' => $ip, ':source' => $source, ':claim' => $claim, ':decision' => $decision] as $key => $value) {
+            $stmt->bindValue($key, $value, SQLITE3_TEXT);
+        }
+        $stmt->bindValue(':score', $score, SQLITE3_INTEGER);
+        $stmt->bindValue(':expires', time() + $ttl, SQLITE3_INTEGER);
+        $stmt->execute();
+    }
+
     public static function getCachedDecision(SQLite3 $db, string $ip, string $source): ?array
     {
         $stmt = $db->prepare(
@@ -491,10 +525,37 @@ class BotwardenDatabase
 
     public static function enqueueReport(SQLite3 $db, string $ip, string $path): void
     {
-        $stmt = $db->prepare('INSERT INTO report_queue (ip, path) VALUES (:ip, :path)');
+        $stmt = $db->prepare('INSERT INTO report_queue (ip, path) SELECT :ip, :path
+            WHERE NOT EXISTS (SELECT 1 FROM report_queue WHERE ip = :ip AND path = :path)
+            AND (SELECT COUNT(*) FROM report_queue) < 10000');
         $stmt->bindValue(':ip', $ip, SQLITE3_TEXT);
         $stmt->bindValue(':path', substr($path, 0, 500), SQLITE3_TEXT);
         $stmt->execute();
+        if ($db->changes() === 0) self::incrementMeta($db, 'reports_not_queued');
+    }
+
+    public static function incrementMeta(SQLite3 $db, string $key): void
+    {
+        $stmt = $db->prepare('INSERT OR IGNORE INTO metadata (key, value) VALUES (:key, 0)');
+        $stmt->bindValue(':key', $key, SQLITE3_TEXT);
+        $stmt->execute();
+        $stmt = $db->prepare('UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = :key');
+        $stmt->bindValue(':key', $key, SQLITE3_TEXT);
+        $stmt->execute();
+    }
+
+    public static function expireReports(SQLite3 $db): int
+    {
+        $stmt = $db->prepare('DELETE FROM report_queue WHERE queued_at <= :cutoff');
+        $stmt->bindValue(':cutoff', time() - 604800, SQLITE3_INTEGER);
+        $stmt->execute();
+        $expired = $db->changes();
+        // Converge oversized pre-upgrade queues as well as bounding new inserts.
+        $db->exec('DELETE FROM report_queue WHERE id NOT IN (SELECT id FROM report_queue ORDER BY id ASC LIMIT 10000)');
+        $dropped = $db->changes();
+        if ($dropped) self::setMeta($db, 'reports_dropped', (string)((int)self::getMeta($db, 'reports_dropped') + $dropped));
+        if ($expired) self::setMeta($db, 'reports_expired', (string)((int)self::getMeta($db, 'reports_expired') + $expired));
+        return $expired;
     }
 
     public static function getPendingReports(SQLite3 $db, int $limit = 100): array
@@ -532,6 +593,7 @@ class BotwardenDatabase
         $stmt->bindValue(':id', $id, SQLITE3_INTEGER);
         $stmt->bindValue(':max', $maxAttempts, SQLITE3_INTEGER);
         $stmt->execute();
+        if ($db->changes() > 0) self::incrementMeta($db, 'reports_dropped');
     }
 
     // --- Metadata ---

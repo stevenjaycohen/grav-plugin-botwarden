@@ -53,7 +53,7 @@ Use **Plugin settings** in the dashboard, or merge overrides into `user/config/p
 
 ### Local blocking and request filtering
 
-- Use the dashboard's **Local IP blacklist** to block an address with a reason or remove a local block. The dashboard also shows security statistics and block history.
+- Use the dashboard's **Local IP blacklist** to block an address with a reason or remove a local block. Exact-IP search and manual/automatic, active/expired labels distinguish stored rows from effective blocks. Removal affects only the local source. Block history has independent Previous/Next controls; manual promotions and reason edits are recorded as `promote` and `edit`. History distinguishes manual and automatic changes, without storing an individual operator identity.
 - Add IP addresses or CIDR ranges to **Whitelisted IPs / CIDRs** to exempt them from blocking. Enter one per line.
 - If your site uses a reverse proxy or CDN, configure **Trusted Proxies** with its IP addresses or CIDR ranges. Forwarded client-IP headers are used only when the direct connection is from a trusted proxy; otherwise botWarden uses the direct connection's address.
 - For a Cloudflare-fronted site, explicitly select **Trusted Proxy Preset → Cloudflare (IPv4 and IPv6)**. The preset adds Cloudflare's published ranges to any custom **Trusted Proxies** entries; **None** is the default. It uses bundled ranges verified on 2026-11-01 against Cloudflare's [IPv4 list](https://www.cloudflare.com/ips-v4/) and [IPv6 list](https://www.cloudflare.com/ips-v6/), without request-time downloads. Review the published lists when updating the plugin.
@@ -89,7 +89,7 @@ robots_txt:
   enabled: true
 ```
 
-This uses the Known Agents project access token in `dark_visitors.api_key` and requires PHP write access to the Grav root `robots.txt` and its directory. The scheduled update writes between `# botWarden:START` and `# botWarden:END`, appending the section when absent and preserving content outside it, including separate Known Hosts rules. Existing files are backed up before changes in `user/data/botwarden/backups/`. Invalid or duplicate markers stop publication without changing the file. Publishing rules and enabling User-Agent blocking are separate settings.
+This uses the Known Agents project access token in `dark_visitors.api_key` and requires PHP write access to the Grav root `robots.txt` and its directory. The scheduled update writes between `# botWarden:START` and `# botWarden:END`, appending the section when absent and preserving content outside it, including separate Known Hosts rules. Existing files are backed up before changes in `user/data/botwarden/backups/`. Invalid or duplicate markers stop publication without changing the file. Publishing rules and enabling User-Agent blocking are separate settings. To withdraw the published policy, disable publication, then use **Preview robots.txt policy removal** on the dashboard and confirm the displayed content. Only the marked block is removed; a changed preview is refused. Backups are retained without automatic deletion. botWarden writers share a bounded lock and compare owner content before replacement. External editors should use the same lock (`user/data/botwarden/backups/.robots.lock`) or pause publication: an uncoordinated edit in the final comparison/rename window cannot be guaranteed against.
 
 ### Known Agents visit reporting
 
@@ -106,7 +106,7 @@ dark_visitors:
   report_visits: true
 ```
 
-Automatic visit reporting sends public-site request metadata to Known Agents after Grav emits the response. It excludes the configured Admin2 and versioned API routes, including login and API authentication requests, using the same path-prefix check as the blocker. Reports have a three-second timeout; failures are logged without replacing the page response and are not queued for retry.
+Automatic visit reporting sends public-site request metadata to Known Agents after Grav emits the response. It excludes the configured Admin2 and versioned API routes, including login and API authentication requests, using the same path-prefix check as the blocker. Reports have a three-second timeout; failures are logged without replacing the page response and are not queued for retry. The dashboard shows accepted/failed attempts and the last attempt when a botWarden database already exists. These counters are best-effort diagnostics; database contention can prevent their recording. HTTP acceptance does not establish a connected provider project. PHP-FPM/browser response timing and worker occupancy must be measured on the intended hosting environment.
 
 Events include the path without its query string, HTTP method, selected headers (including User-Agent and client-IP information), response status, available content type and elapsed time. Authorization headers, cookies, API keys, request bodies and response bodies are excluded. Referer URLs have credentials, query strings and fragments removed.
 
@@ -118,13 +118,19 @@ Configure Grav's scheduler to run regularly through your hosting environment. En
 | --- | --- | --- |
 | Local blacklist trimming and database vacuum | Daily at 02:35 | `auto_clean` |
 | AbuseIPDB bulk refresh | Daily at 02:45 | `auto_cache`, AbuseIPDB bulk source and API key |
-| Known Agents crawler refresh / robots.txt publication | Daily at 03:00 | Known Agents source or robots.txt publication, plus project token |
+| Known Agents crawler refresh / robots.txt publication | Every five minutes; downloads only when the configured TTL has elapsed | Known Agents source or robots.txt publication, plus project token |
 | Expired cache/local entries and block history cleanup | Daily at 03:30 | Always registered while botWarden is enabled, after any required migration |
 | Queued AbuseIPDB reports | Every 10 minutes | `enable_reporting` and AbuseIPDB API key |
 
 After enabling a list source, run its job from Grav's scheduler or wait for its scheduled refresh, then check the dashboard counts and scheduler results.
 
-The `botwarden-prune-history` job removes expired IP cache rows (including expired CrowdSec single-flight sentinels), expired automatic local blocks, and old or excess history rows even with `auto_clean: false`. It preserves unexpired cache/local entries and manual blocks; `local_ttl: 0` keeps automatic local blocks permanent. Size-based blacklist trimming and `VACUUM` remain in the optional `auto_clean` job, which also prunes before reclaiming database space. These tasks require a running Grav scheduler; registration alone does not execute them.
+The dashboard reports feed readiness separately from stored counts: disabled, missing credentials, automatic refresh disabled, never refreshed, stale, failed, or fresh. Its refresh controls run the existing scheduler jobs for configured feeds; AbuseIPDB also requires **Auto-refresh AbuseIPDB Bulk List**. Known Agents uses `dark_visitors.cache_ttl` (minimum one hour, default 24 hours), including saved and migrated values. A freshness check can publish cached rules when robots.txt publication is newly enabled. A fresh list describes cached rules, not verification of credentials or a provider account. Selecting zero Known Agents categories retains the four defaults for compatibility; disable the source and publication to stop the policy.
+
+AbuseIPDB reporting deduplicates pending IP/path pairs and accepts at most 10,000 pending rows. New duplicate/full-queue events are counted rather than appended. Flushes and daily maintenance discard reports older than seven days and trim pre-existing oversized queues to the oldest 10,000 rows. Each flush attempts at most 200 rows within a 20-second network budget, with a maximum three-second timeout per send. The first failure stops that flush: HTTP 429 backs off for one hour; other failures back off for five minutes. Reports still exhaust after five failed sends. The dashboard exposes sent, failed, dropped, expired and deduplicated/rejected counts. No report is sent from the blocking hook.
+
+Outbound responses are capped at 32 MiB during transfer. Invalid URI expressions are skipped without emitting PHP warnings to visitors and are identified on the dashboard; diagnostic URIs omit query strings. Existing filter matching and expensive-pattern rejection semantics are retained.
+
+The `botwarden-prune-history` job removes expired IP cache rows (including expired CrowdSec single-flight sentinels), expired automatic local blocks, and old or excess history rows even with `auto_clean: false`. It preserves unexpired cache/local entries and manual blocks; `local_ttl: 0` keeps automatic local blocks permanent. Size-based blacklist trimming and `VACUUM` remain in the optional `auto_clean` job, which also prunes before reclaiming database space. History age and row limits are available in Plugin settings. These tasks require a running Grav scheduler; registration alone does not execute them.
 
 ## Migrating from GRVHulk
 
@@ -143,6 +149,8 @@ php user/plugins/botwarden/cli/migrate.php --confirm
 
 The migration copies compatible YAML settings **with botWarden disabled**, and uses SQLite's online backup API to snapshot the original database (safe for WAL). Backups are stored under `user/data/botwarden/backups`. It does not delete, disable or overwrite the older GRVHulk installation and will not overwrite existing botWarden settings or data.
 
+If an existing destination prevents import, the dashboard and CLI preview explain recovery: back up both configurations and SQLite databases, compare or merge intentionally, or move the backed-up destination aside before normal import. Configuration-only and database-only imports are supported when their sources are readable and destinations empty. Do not manufacture a completion marker. Disabling GRVHulk without completing migration does not clear the legacy guard. A manual merge alone also leaves that guard active while legacy artifacts remain; deliberately archive/remove those artifacts only after disabling GRVHulk, backing up and verifying both datasets. The normal importer provides the supported completion marker.
+
 **After verifying the imported data, disable GRVHulk before enabling botWarden.** A partially completed migration rolls back newly created destination files; backups are retained for review. Review configuration keys and scheduler settings before production activation.
 
 ## Emergency unblock
@@ -154,7 +162,7 @@ php user/plugins/botwarden/cli/unblock.php --list
 php user/plugins/botwarden/cli/unblock.php 203.0.113.7 --whitelist
 ```
 
-`--whitelist` also adds the address to `user/config/plugins/botwarden.yaml` so it takes priority over other blocking sources.
+`--whitelist` also adds the address to `user/config/plugins/botwarden.yaml` so it takes priority over other blocking sources. It supports absent keys, multiline strings and YAML sequences/inline lists, checks only the whitelist for duplicates, and preserves unrelated settings and comments. It also supports whitelist-only recovery when no database is available. Exit 0 means the requested whitelist is present (or a plain unblock removed a row); exit 1 reports failure, including partial recovery when the block was removed but whitelisting failed. Run `php bin/grav cache` before retrying access, then remove temporary whitelist entries once recovery is complete. CLI removals use the same audit path as the API.
 
 ## Updating botWarden
 
@@ -162,7 +170,7 @@ Back up `user/config/plugins/botwarden.yaml` and `user/data/botwarden/`, then re
 
 ## Optional MCP access
 
-If you use Grav's MCP Server plugin, botWarden provides tools to inspect status, local blocks and history, add or remove local blocks, and preview or confirm a GRVHulk import. These tools require `api.super` permission. MCP Server is not required for installation or dashboard use.
+If you use Grav's MCP Server plugin, botWarden provides tools to inspect status, local blocks and history, add or remove local blocks, preview or confirm a GRVHulk import, run an authorized feed refresh, and preview or confirm withdrawal of the marked robots.txt policy. There are nine management tools; writes retain superuser and session-origin protections. These tools require `api.super` permission. MCP Server is not required for installation or dashboard use.
 
 ## Support
 

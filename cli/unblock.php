@@ -14,7 +14,7 @@ if (PHP_SAPI !== 'cli') {
  *
  * Options:
  *   --list         Show the last 25 IPs in the local blacklist
- *   --whitelist    Also add the IP to hulk.yaml whitelist (persistent)
+ *   --whitelist    Also add the IP to botwarden.yaml whitelist (persistent)
  *   --db=PATH      Override the path to botwarden.sqlite
  */
 
@@ -68,17 +68,22 @@ if (!$dbPath) {
     }
 }
 
-if (!$dbPath || !file_exists($dbPath)) {
+if ((!$dbPath || !file_exists($dbPath)) && (!$addWl || $list)) {
     fwrite(STDERR, "Error: cannot find botwarden.sqlite.\n");
     fwrite(STDERR, "Run from Grav root, or pass --db=/path/to/botwarden.sqlite\n");
     exit(1);
 }
 
-// ── Open DB ───────────────────────────────────────────────────────────────────
-
-$db = new SQLite3($dbPath);
-$db->enableExceptions(true);
-$db->exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;');
+// Load Grav's existing YAML support; development dependencies are not required.
+$autoload = __DIR__ . '/../../../../vendor/autoload.php';
+if (is_file($autoload)) require_once $autoload;
+require_once __DIR__ . '/../classes/BotwardenDatabase.php';
+$db = null;
+if ($dbPath && is_file($dbPath)) {
+    $db = new SQLite3($dbPath);
+    $db->enableExceptions(true);
+    $db->busyTimeout(5000);
+}
 
 // ── --list ────────────────────────────────────────────────────────────────────
 
@@ -110,14 +115,18 @@ if (!filter_var($ip, FILTER_VALIDATE_IP)) {
 
 // ── Remove from local blacklist ───────────────────────────────────────────────
 
-$stmt = $db->prepare('DELETE FROM local WHERE ip = :ip');
-$stmt->bindValue(':ip', $ip, SQLITE3_TEXT);
-$stmt->execute();
-$removed = $db->changes();
-$db->close();
+$removed = 0;
+if ($db !== null) {
+    $existing = \Grav\Plugin\Botwarden\BotwardenDatabase::searchLocal($db, $ip);
+    \Grav\Plugin\Botwarden\BotwardenDatabase::removeIpFromLocal($db, $ip);
+    $removed = $existing !== null ? 1 : 0;
+    $db->close();
+}
 
 if ($removed > 0) {
     echo "✓ Removed $ip from local blacklist.\n";
+} elseif ($db === null) {
+    echo "Info: no local database found; continuing with whitelist-only recovery.\n";
 } else {
     echo "Info: $ip was not in the local blacklist.\n";
 }
@@ -125,100 +134,73 @@ if ($removed > 0) {
 // ── --whitelist: append to botwarden.yaml ──────────────────────────────────────
 
 if ($addWl) {
-    // Write to the user override only: [grav-root]/user/config/plugins/botwarden.yaml.
-    // __DIR__ = [grav-root]/user/plugins/botwarden/cli, so three '..' reach `user`.
-    // Never touch the plugin's bundled default (it would be lost on update and
-    // shipped config should stay pristine).
     $yamlPath = __DIR__ . '/../../../config/plugins/botwarden.yaml';
-
-    if (!file_exists($yamlPath)) {
-        // No user override yet — create a fresh one containing just this entry.
-        // (Loopback/LAN defaults are private IPs, which are skipped before the
-        // whitelist is ever consulted, so nothing protective is lost.)
-        @mkdir(dirname($yamlPath), 0775, true);
-        if (file_put_contents($yamlPath, "whitelist:\n  - '$ip'\n") !== false) {
-            echo "✓ Created $yamlPath with $ip whitelisted\n";
-            echo "  (Remove this entry once you no longer need it.)\n";
-        } else {
-            fwrite(STDERR, "Warning: could not create $yamlPath — add the IP to the whitelist manually.\n");
-        }
-        exit($removed > 0 ? 0 : 1);
-    }
-
-    if (!is_writable($yamlPath)) {
-        fwrite(STDERR, "Warning: cannot write to $yamlPath — add the IP to the whitelist manually.\n");
-        exit($removed > 0 ? 0 : 1);
-    }
-
-    $yaml = file_get_contents($yamlPath);
-    // Already present? Match the IP as a standalone token so bare block-scalar
-    // entries (e.g. "  203.0.113.5") and quoted/list entries are all detected.
-    if (preg_match('/(^|[\s\'"\-])' . preg_quote($ip, '/') . '($|[\s\'"])/m', $yaml)) {
-        echo "Info: $ip is already in the whitelist.\n";
-    } else {
+    try {
+        if (is_link($yamlPath)) throw new \RuntimeException('Refusing a configuration symlink');
+        $yaml = is_file($yamlPath) ? file_get_contents($yamlPath) : '';
+        if ($yaml === false) throw new \RuntimeException('Cannot read the configuration');
         $updated = appendToWhitelist($yaml, $ip);
-        if ($updated !== null) {
-            file_put_contents($yamlPath, $updated);
-            echo "✓ Added $ip to whitelist in $yamlPath\n";
-            echo "  (Remove this entry once you no longer need it.)\n";
-        } else {
-            fwrite(STDERR, "Warning: could not locate 'whitelist:' key in $yamlPath — add manually.\n");
+        if ($updated !== $yaml) {
+            if (!is_dir(dirname($yamlPath)) && !mkdir(dirname($yamlPath), 0775, true)) {
+                throw new \RuntimeException('Cannot create the configuration directory');
+            }
+            if (!is_writable(dirname($yamlPath))) throw new \RuntimeException('Configuration directory is not writable');
+            $temporary = tempnam(dirname($yamlPath), '.botwarden-whitelist-');
+            if ($temporary === false) throw new \RuntimeException('Cannot create temporary configuration');
+            try {
+                if (file_put_contents($temporary, $updated, LOCK_EX) !== strlen($updated)) {
+                    throw new \RuntimeException('Cannot write the complete whitelist configuration');
+                }
+                if (!chmod($temporary, is_file($yamlPath) ? fileperms($yamlPath) & 0777 : 0640)) {
+                    throw new \RuntimeException('Cannot preserve configuration permissions');
+                }
+                if (is_link($yamlPath) || (is_file($yamlPath) ? file_get_contents($yamlPath) : '') !== $yaml) {
+                    throw new \RuntimeException('Configuration changed during recovery; retry');
+                }
+                if (!rename($temporary, $yamlPath)) throw new \RuntimeException('Cannot replace configuration');
+            } finally {
+                if (is_file($temporary)) unlink($temporary);
+            }
         }
+        echo "✓ $ip is whitelisted in $yamlPath\n";
+        echo "Run php bin/grav cache from the Grav root before retrying access.\n";
+        echo "Remove the temporary whitelist entry when recovery is complete.\n";
+        exit(0);
+    } catch (\Throwable $error) {
+        fwrite(STDERR, "Whitelist failed: " . $error->getMessage() . "\n");
+        if ($removed) fwrite(STDERR, "Partial recovery: local block removed; whitelist update failed.\n");
+        exit(1);
     }
 }
 
 exit($removed > 0 ? 0 : 1);
 
 /**
- * Append an IP to the `whitelist:` section, handling both the block-scalar
- * form (`whitelist: |` with bare indented IPs — the shipped default) and the
- * YAML list form (`- 1.2.3.4`). Returns the updated YAML, or null if no
- * `whitelist:` key was found.
+ * Merge the whitelist using Grav's YAML parser while retaining unrelated text.
  */
-function appendToWhitelist(string $yaml, string $ip): ?string
+function appendToWhitelist(string $yaml, string $ip): string
 {
-    $lines = explode("\n", $yaml);
-    $count = count($lines);
-
-    for ($i = 0; $i < $count; $i++) {
-        if (!preg_match('/^(\s*)whitelist:\s*(.*)$/', $lines[$i], $m)) {
-            continue;
-        }
-        $baseIndent  = $m[1];
-        $inlineValue = trim($m[2]);
-        $isBlockScalar = $inlineValue !== '' && ($inlineValue[0] === '|' || $inlineValue[0] === '>');
-        $childIndent = null;
-        $isList      = false;
-        $lastChild   = $i;
-
-        // Walk the block: lines indented deeper than the `whitelist:` key.
-        for ($j = $i + 1; $j < $count; $j++) {
-            if (trim($lines[$j]) === '') {
-                continue; // tolerate blank lines without ending the block
-            }
-            if (!preg_match('/^(\s+)\S/', $lines[$j], $im) || strlen($im[1]) <= strlen($baseIndent)) {
-                break; // dedent → next key, block ended
-            }
-            if ($childIndent === null) {
-                $childIndent = $im[1];
-                $isList      = str_starts_with(ltrim($lines[$j]), '- ');
-            }
-            $lastChild = $j;
-        }
-
-        // With no existing entries, emit a list item unless it's a `|`/`>` block
-        // scalar — appending a bare scalar to an empty key would parse as a
-        // string, not a one-item list.
-        if ($childIndent === null && !$isBlockScalar) {
-            $isList = true;
-        }
-
-        $indent  = $childIndent ?? ($baseIndent . '  ');
-        $newLine = $isList ? ($indent . "- '" . $ip . "'") : ($indent . $ip);
-        array_splice($lines, $lastChild + 1, 0, $newLine);
-
-        return implode("\n", $lines);
+    $parsed = \Symfony\Component\Yaml\Yaml::parse($yaml) ?? [];
+    if (!is_array($parsed)) throw new \RuntimeException('Configuration must be a YAML mapping');
+    $whitelist = $parsed['whitelist'] ?? [];
+    if (is_string($whitelist)) $whitelist = preg_split('/\r\n|\r|\n/', $whitelist) ?: [];
+    if (!is_array($whitelist)) throw new \RuntimeException('Whitelist must be a list or multiline string');
+    $whitelist = array_values(array_filter(array_map('trim', $whitelist),
+        static fn(string $entry): bool => $entry !== '' && !str_starts_with($entry, '#')));
+    if (in_array($ip, $whitelist, true)) return $yaml;
+    $whitelist[] = $ip;
+    $replacement = \Symfony\Component\Yaml\Yaml::dump(['whitelist' => $whitelist], 2, 2);
+    if (str_contains($yaml, "\r\n")) $replacement = str_replace("\n", "\r\n", $replacement);
+    // Replace only this top-level key, keeping unrelated text and comments.
+    if (preg_match('/^whitelist:[^\r\n]*(?:\r?\n(?:[ \t]+[^\r\n]*|))*/m', $yaml, $match, PREG_OFFSET_CAPTURE)) {
+        [$block, $offset] = $match[0];
+        $ending = str_ends_with($block, "\n") ? (str_contains($yaml, "\r\n") ? "\r\n" : "\n") : '';
+        $updated = substr_replace($yaml, rtrim($replacement, "\r\n") . $ending, $offset, strlen($block));
+    } else {
+        $updated = $yaml . ($yaml === '' || str_ends_with($yaml, "\n") ? '' : "\n") . $replacement;
     }
-
-    return null;
+    $check = \Symfony\Component\Yaml\Yaml::parse($updated);
+    $parsed['whitelist'] = $whitelist;
+    if ($check !== $parsed) throw new \RuntimeException('Whitelist merge would change unrelated configuration');
+    return $updated;
 }

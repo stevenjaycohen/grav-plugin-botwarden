@@ -42,6 +42,49 @@ class BotwardenDatabaseTest extends TestCase
         @rmdir($this->tempDir);
     }
 
+    public function testManualPromotionsAndReasonEditsHaveHistoryWithoutDuplicateNoise(): void
+    {
+        BotwardenDatabase::addIpToLocal($this->db, '8.8.8.8', 'automatic');
+        BotwardenDatabase::addIpToLocal($this->db, '8.8.8.8', 'manual', true);
+        BotwardenDatabase::addIpToLocal($this->db, '8.8.8.8', 'manual', true);
+        BotwardenDatabase::addIpToLocal($this->db, '8.8.8.8', 'edited', true);
+        BotwardenDatabase::removeIpFromLocal($this->db, '8.8.8.8');
+        $this->assertSame(['unblock', 'edit', 'promote', 'block'], array_column(BotwardenDatabase::getHistory($this->db), 'action'));
+    }
+
+    public function testDecisionClaimsHaveOneOwnerAndLateResultsCannotOverwrite(): void
+    {
+        $claim = BotwardenDatabase::claimDecision($this->db, '8.8.8.8', 'crowdsec_cti');
+        $this->assertNotNull($claim);
+        $this->assertNull(BotwardenDatabase::claimDecision($this->db, '8.8.8.8', 'crowdsec_cti'));
+        $this->db->exec('UPDATE ip_cache SET expires_at = 1');
+        $replacement = BotwardenDatabase::claimDecision($this->db, '8.8.8.8', 'crowdsec_cti');
+        $this->assertNotSame($claim, $replacement);
+        BotwardenDatabase::finishDecision($this->db, '8.8.8.8', 'crowdsec_cti', $replacement, 'block', 5, 3600);
+        BotwardenDatabase::finishDecision($this->db, '8.8.8.8', 'crowdsec_cti', $claim, 'clean', 0, 3600);
+        $this->assertSame('block', BotwardenDatabase::getCachedDecision($this->db, '8.8.8.8', 'crowdsec_cti')['decision']);
+    }
+
+    public function testReportQueueDeduplicatesCapsAndExpires(): void
+    {
+        BotwardenDatabase::enqueueReport($this->db, '8.8.8.8', '/probe');
+        BotwardenDatabase::enqueueReport($this->db, '8.8.8.8', '/probe');
+        $this->assertCount(1, BotwardenDatabase::getPendingReports($this->db));
+        $this->assertSame('1', BotwardenDatabase::getMeta($this->db, 'reports_not_queued'));
+        $this->db->exec('BEGIN');
+        for ($i = 1; $i < 10000; $i++) $this->db->exec("INSERT INTO report_queue (ip, path) VALUES ('8.8.8.8', '/" . $i . "')");
+        $this->db->exec('COMMIT');
+        BotwardenDatabase::enqueueReport($this->db, '1.1.1.1', '/new');
+        $this->assertSame(10000, $this->db->querySingle('SELECT COUNT(*) FROM report_queue'));
+        $this->db->exec("INSERT INTO report_queue (ip, path) VALUES ('1.1.1.1', '/pre-upgrade-overflow')");
+        $this->assertSame(0, BotwardenDatabase::expireReports($this->db));
+        $this->assertSame(10000, $this->db->querySingle('SELECT COUNT(*) FROM report_queue'));
+        $this->assertSame('1', BotwardenDatabase::getMeta($this->db, 'reports_dropped'));
+        $this->db->exec('UPDATE report_queue SET queued_at = 1');
+        $this->assertSame(10000, BotwardenDatabase::expireReports($this->db));
+        $this->assertSame([], BotwardenDatabase::getPendingReports($this->db));
+    }
+
     // ── Local blacklist ──────────────────────────────────────────────────────
 
     public function testAddAndCheckIpInLocal(): void

@@ -4,6 +4,7 @@ namespace Grav\Plugin\Botwarden;
 /** AbuseIPDB bulk list and deferred reports. Network failures never return an empty success. */
 final class AbuseIpDbClient
 {
+    public int $lastReportStatus = 0;
     public function __construct(private array $config) {}
 
     /** @return string[] */
@@ -38,8 +39,9 @@ final class AbuseIpDbClient
         return array_values($ips);
     }
 
-    public function reportIp(string $ip, string $path, int $category = 21): bool
+    public function reportIp(string $ip, string $path, int $category = 21, int $timeout = 3): bool
     {
+        $this->lastReportStatus = 0;
         if (empty($this->config['api_key'])) return false;
         try {
             $response = HttpClient::request(
@@ -49,8 +51,10 @@ final class AbuseIpDbClient
                 http_build_query([
                     'ip' => $ip, 'categories' => (string)$category,
                     'comment' => 'Blocked by botWarden. Path: ' . substr($path, 0, 500),
-                ])
+                ]),
+                $timeout
             );
+            $this->lastReportStatus = $response['status'];
             return $response['status'] === 200;
         } catch (\Throwable $error) {
             error_log('[botWarden] AbuseIPDB report failed: ' . $error->getMessage());

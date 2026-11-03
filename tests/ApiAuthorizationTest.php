@@ -73,6 +73,8 @@ final class ApiAuthorizationTest extends TestCase
             ['POST', '/botwarden/blocks', ['ip' => '198.51.100.200', 'reason' => 'Authorization fixture']],
             ['POST', '/botwarden/unblock', ['ip' => '198.51.100.200']],
             ['POST', '/botwarden/migrate', ['confirm' => true]],
+            ['POST', '/botwarden/refresh', ['source' => 'dark_visitors']],
+            ['POST', '/botwarden/robots/withdraw', ['confirm' => true]],
         ];
     }
 
@@ -93,6 +95,219 @@ final class ApiAuthorizationTest extends TestCase
         $expected = in_array($credential, ['anonymous', 'pending_two_factor'], true) ? 401 : 403;
         $this->assertSame($expected, $response['status'], $credential . ' ' . $path);
         $this->assertSame($before, $this->state(), 'Denied requests must not change security data or legacy files');
+    }
+
+    public function testReadinessSearchAndHistoryOffsetsDescribeEffectiveState(): void
+    {
+        $headers = self::headers('unscoped_super');
+        $response = self::request('GET', '/api/v1/botwarden/status', null, $headers);
+        $this->assertSame(200, $response['status']);
+        $this->assertArrayHasKey('integrations', $response['json']['data']);
+        $this->assertArrayHasKey('visit_reporting', $response['json']['data']);
+        for ($i = 1; $i <= 30; $i++) self::request('POST', '/api/v1/botwarden/blocks', ['ip' => '11.2.0.' . $i], $headers);
+        $blocks = self::request('GET', '/api/v1/botwarden/blocks?search=11.2.0.7', null, $headers)['json']['data'];
+        $this->assertSame(1, $blocks['total']);
+        $this->assertSame('11.2.0.7', $blocks['entries'][0]['ip']);
+        $this->assertTrue($blocks['entries'][0]['is_active']);
+        $this->assertSame(1, $blocks['entries'][0]['is_manual']);
+        $db = new SQLite3(self::$host . '/user/data/botwarden/botwarden.sqlite');
+        $db->exec("INSERT INTO local (ip, is_manual, added_at) VALUES ('8.8.4.4', 0, 1)"); $db->close();
+        $expired = self::request('GET', '/api/v1/botwarden/blocks?search=8.8.4.4', null, $headers)['json']['data'];
+        $this->assertFalse($expired['entries'][0]['is_active']);
+
+        $history = self::request('GET', '/api/v1/botwarden/history?limit=25&offset=999', null, $headers)['json']['data'];
+        $this->assertSame(999, $history['offset']);
+        $this->assertSame([], $history['entries']);
+        $history = self::request('GET', '/api/v1/botwarden/history?limit=25&offset=25', null, $headers)['json']['data'];
+        $this->assertCount(5, $history['entries']);
+    }
+
+    public function testSettingsRejectMalformedCidrPrefixes(): void
+    {
+        require_once self::$host . '/vendor/autoload.php';
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = $original !== null ? fileperms($path) & 0777 : null;
+        $mtime = $original !== null ? filemtime($path) : null;
+        try {
+            file_put_contents($path, "enabled: true\nwhitelist: ''\ntrusted_proxies: ''\n");
+            self::helper('clear_cache');
+            foreach (['whitelist', 'trusted_proxies'] as $field) {
+                foreach (['192.0.2.0/oops', '192.0.2.0/33', '2001:db8::/129', '2001:db8::/24junk'] as $value) {
+                    $response = self::request('PATCH', '/api/v1/config/plugins/botwarden', [$field => $value], self::headers('unscoped_super'));
+                    $this->assertSame(422, $response['status'], $field . ' ' . $value);
+                }
+            }
+        } finally {
+            if ($original === null) { if (is_file($path)) unlink($path); }
+            else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
+            self::helper('clear_cache');
+        }
+    }
+
+    public function testCliRecoveryHandlesYamlShapesAndRecordsUnblock(): void
+    {
+        require_once self::$host . '/vendor/autoload.php';
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = $original !== null ? fileperms($path) & 0777 : null;
+        $mtime = $original !== null ? filemtime($path) : null;
+        $shapes = ["enabled: true\n", "enabled: true\nwhitelist: |\n  1.1.1.1\n", "enabled: true\nwhitelist: [1.1.1.1]\n", "enabled: true\nwhitelist:\n  - 1.1.1.1\n", "enabled: true\ntrusted_proxies: '8.8.8.8'\nwhitelist: ''\n"];
+        try {
+            foreach ($shapes as $yaml) {
+                file_put_contents($path, $yaml . "# unrelated comment\nlogging: false\n");
+                self::request('POST', '/api/v1/botwarden/blocks', ['ip' => '8.8.8.8'], self::headers('unscoped_super'));
+                $process = proc_open([PHP_BINARY, self::$host . '/user/plugins/botwarden/cli/unblock.php', '8.8.8.8', '--whitelist'],
+                    [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::$host);
+                fclose($pipes[0]); $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+                $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+                $this->assertSame(0, proc_close($process), $err . $out);
+                $this->assertSame('', $err);
+                $parsed = \Symfony\Component\Yaml\Yaml::parseFile($path);
+                $this->assertContains('8.8.8.8', $parsed['whitelist']);
+                $this->assertFalse($parsed['logging']);
+                $this->assertStringContainsString('# unrelated comment', file_get_contents($path));
+                $this->assertStringContainsString('php bin/grav cache', $out);
+                $history = self::request('GET', '/api/v1/botwarden/history', null, self::headers('unscoped_super'))['json']['data']['entries'];
+                $this->assertSame('unblock', $history[0]['action']);
+            }
+        } finally {
+            if ($original === null) { if (is_file($path)) unlink($path); }
+            else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
+            self::helper('clear_cache');
+        }
+    }
+
+    public function testCliWhitelistOnlyRecoveryAndFailedWriteHaveAccurateExitStatus(): void
+    {
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = $original !== null ? fileperms($path) & 0777 : null;
+        $mtime = $original !== null ? filemtime($path) : null;
+        $directoryMode = fileperms(dirname($path)) & 0777;
+        $run = static function (string $ip): array {
+            $process = proc_open([PHP_BINARY, self::$host . '/user/plugins/botwarden/cli/unblock.php', $ip, '--whitelist'],
+                [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::$host);
+            fclose($pipes[0]); $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+            $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+            return [proc_close($process), $out, $err];
+        };
+        try {
+            file_put_contents($path, "enabled: true\n");
+            [$code, $out, $err] = $run('8.8.8.8');
+            $this->assertSame(0, $code, $err);
+            $this->assertStringContainsString('was not in the local blacklist', $out);
+            $before = file_get_contents($path);
+            $this->assertSame(0, $run('8.8.8.8')[0]);
+            $this->assertSame($before, file_get_contents($path));
+            chmod(dirname($path), 0550);
+            if (is_writable(dirname($path))) $this->markTestSkipped('A privileged test user cannot reproduce a directory write denial');
+            [$code, $out, $err] = $run('1.1.1.1');
+            $this->assertSame(1, $code);
+            $this->assertStringContainsString('not writable', $err);
+            $this->assertStringNotContainsString('is whitelisted', $out);
+            $this->assertSame($before, file_get_contents($path));
+        } finally {
+            chmod(dirname($path), $directoryMode);
+            if ($original === null) { if (is_file($path)) unlink($path); }
+            else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
+            self::helper('clear_cache');
+        }
+    }
+
+    public function testAuthenticatedDashboardRendersAndNavigatesInARealBrowser(): void
+    {
+        if (getenv('BOTWARDEN_BROWSER_URL') !== 'http://127.0.0.1:8877') $this->markTestSkipped('Opt in to the localhost browser fixture');
+        for ($i = 1; $i <= 31; $i++) {
+            self::request('POST', '/api/v1/botwarden/blocks', ['ip' => '11.7.0.' . $i], self::headers('unscoped_super'));
+        }
+        $beforeSessions = glob(dirname(self::$work) . '/sessions/sess_*');
+        try {
+            $process = proc_open(['node', __DIR__ . '/fixtures/BrowserProbe.mjs', 'dashboard', 'dashboard'],
+                [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            $this->assertIsResource($process);
+            $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+            $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+            $this->assertSame(0, proc_close($process), $err);
+            $this->assertSame('', $err);
+            $observed = json_decode($out, true, 512, JSON_THROW_ON_ERROR);
+            $this->assertTrue($observed['dashboard']);
+            $this->assertTrue($observed['historyPaged']);
+            $this->assertTrue($observed['searchFound']);
+        } finally {
+            foreach (array_diff(glob(dirname(self::$work) . '/sessions/sess_*'), $beforeSessions) as $path) {
+                if (is_file($path) && !is_link($path)) unlink($path);
+            }
+        }
+
+    }
+
+    public function testFirstRefreshReadinessAndFailureAreVisibleThroughApi(): void
+    {
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = $original !== null ? fileperms($path) & 0777 : null;
+        $mtime = $original !== null ? filemtime($path) : null;
+        $work = dirname(self::$work) . '/services';
+        $this->assertDirectoryDoesNotExist($work);
+        mkdir($work, 0700);
+        $headers = self::headers('unscoped_super');
+        try {
+            $config = ['enabled' => true, 'sources' => ['dark_visitors' => true], 'dark_visitors' => ['api_key' => null]];
+            file_put_contents($path, json_encode($config)); self::helper('clear_cache');
+            $status = self::request('GET', '/api/v1/botwarden/status', null, $headers)['json']['data'];
+            $this->assertSame('missing credentials', $status['integrations']['dark_visitors']['state']);
+            $config['dark_visitors']['api_key'] = 'synthetic-fixture-key';
+            file_put_contents($path, json_encode($config)); self::helper('clear_cache');
+            $status = self::request('GET', '/api/v1/botwarden/status', null, $headers)['json']['data'];
+            $this->assertSame('never refreshed', $status['integrations']['dark_visitors']['state']);
+            $refreshed = self::request('POST', '/api/v1/botwarden/refresh', ['source' => 'dark_visitors'], $headers);
+            $this->assertSame(200, $refreshed['status']);
+            $this->assertTrue($refreshed['json']['data']['success']);
+            $status = self::request('GET', '/api/v1/botwarden/status', null, $headers)['json']['data'];
+            $this->assertSame('fresh', $status['integrations']['dark_visitors']['state']);
+            $db = new SQLite3(self::$host . '/user/data/botwarden/botwarden.sqlite');
+            $db->exec("UPDATE metadata SET value = '1' WHERE key = 'dark_visitors_updated'"); $db->close();
+            $failed = self::request('POST', '/api/v1/botwarden/refresh', ['source' => 'dark_visitors'], $headers + ['X-Botwarden-Feed-Scenario' => 'unauthorized']);
+            $this->assertSame(200, $failed['status']);
+            $this->assertFalse($failed['json']['data']['success']);
+            $status = self::request('GET', '/api/v1/botwarden/status', null, $headers)['json']['data'];
+            $this->assertSame('refresh failed', $status['integrations']['dark_visitors']['state']);
+            $this->assertSame(2, $status['dark_visitors_count'], 'Failed credentials must preserve the last good rules');
+        } finally {
+            if ($original === null) { if (is_file($path)) unlink($path); }
+            else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
+            self::helper('clear_cache');
+            if (is_file($work . '/requests.jsonl')) unlink($work . '/requests.jsonl');
+            rmdir($work);
+        }
+    }
+
+    public function testRobotsWithdrawalRequiresAReviewedCurrentPreview(): void
+    {
+        $path = self::$host . '/robots.txt';
+        $this->assertFileDoesNotExist($path);
+        $original = "# Owner policy\n" . \Grav\Plugin\Botwarden\RobotsTxtManager::START . "\nUser-agent: FixtureBot\nDisallow: /\n" . \Grav\Plugin\Botwarden\RobotsTxtManager::END . "\n# Other policy\n";
+        file_put_contents($path, $original);
+        $headers = self::headers('unscoped_super');
+        try {
+            $preview = self::request('POST', '/api/v1/botwarden/robots/withdraw', ['confirm' => false], $headers);
+            $this->assertSame(200, $preview['status']);
+            $data = $preview['json']['data'];
+            $this->assertSame("# Owner policy\n\n# Other policy\n", $data['content']);
+            $this->assertSame($original, file_get_contents($path));
+            file_put_contents($path, '# New owner edit' . "\n", FILE_APPEND);
+            $stale = self::request('POST', '/api/v1/botwarden/robots/withdraw', ['confirm' => true, 'sha256' => $data['sha256']], $headers);
+            $this->assertSame(422, $stale['status']);
+            $data = self::request('POST', '/api/v1/botwarden/robots/withdraw', ['confirm' => false], $headers)['json']['data'];
+            $removed = self::request('POST', '/api/v1/botwarden/robots/withdraw', ['confirm' => true, 'sha256' => $data['sha256']], $headers);
+            $this->assertSame(200, $removed['status']);
+            $this->assertTrue($removed['json']['data']['changed']);
+            $this->assertSame($data['content'], file_get_contents($path));
+            $this->assertStringContainsString('# New owner edit', file_get_contents($path));
+        } finally {
+            unlink($path);
+        }
     }
 
     public static function forgedSessionWrites(): iterable
@@ -165,8 +380,8 @@ final class ApiAuthorizationTest extends TestCase
         yield 'restricted key on super account' => ['limited', 0];
         yield 'restricted key with full session' => ['limited_with_session', 0];
         yield 'over-scoped key on regular account' => ['non_super', 0];
-        yield 'explicit super scope' => ['explicit_super', 7];
-        yield 'unscoped super key' => ['unscoped_super', 7];
+        yield 'explicit super scope' => ['explicit_super', 9];
+        yield 'unscoped super key' => ['unscoped_super', 9];
     }
 
     #[DataProvider('discoveryCredentials')]

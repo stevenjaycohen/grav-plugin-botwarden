@@ -134,6 +134,60 @@ final class RobotsTxtManagerTest extends TestCase
         $this->assertStringStartsWith(RobotsTxtManager::START, file_get_contents($path));
     }
 
+    public function testOwnerEditAfterInitialReadSurvivesPublication(): void
+    {
+        $path = $this->directory . '/robots.txt';
+        file_put_contents($path, "# initial owner policy\n");
+        $code = <<<'PHP'
+namespace Grav\Plugin\Botwarden {
+    function file_get_contents(string $path): string|false {
+        $contents = \file_get_contents($path);
+        if (str_ends_with($path, '/robots.txt') && empty($GLOBALS['owner_edited'])) {
+            $GLOBALS['owner_edited'] = true;
+            \file_put_contents($path, "# concurrent owner edit\n", FILE_APPEND);
+        }
+        return $contents;
+    }
+}
+namespace {
+    require $argv[1];
+    \Grav\Plugin\Botwarden\RobotsTxtManager::publish($argv[2], ['FixtureBot'], $argv[3]);
+}
+PHP;
+        $process = proc_open([PHP_BINARY, '-r', $code, dirname(__DIR__) . '/classes/RobotsTxtManager.php', $path, $this->directory . '/backups'],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+        $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+        $this->assertSame(0, proc_close($process), $err . $out);
+        $this->assertSame('', $err);
+        $this->assertStringContainsString('# concurrent owner edit', file_get_contents($path));
+        $this->assertStringContainsString('User-agent: FixtureBot', file_get_contents($path));
+    }
+
+    public function testWithdrawalPreservesOwnerBytesAndRejectsStalePreview(): void
+    {
+        $path = $this->directory . '/robots.txt';
+        $backup = $this->directory . '/backups';
+        $prefix = "# Owner policy\r\nUser-agent: OwnerBot\r\nAllow: /\r\n";
+        $suffix = "\r\n# Other managed block remains\r\n";
+        file_put_contents($path, $prefix . RobotsTxtManager::START . "\nUser-agent: FixtureBot\nDisallow: /\n" . RobotsTxtManager::END . $suffix);
+        $preview = RobotsTxtManager::withdrawalPreview($path);
+        $this->assertSame($prefix . $suffix, $preview['content']);
+        $this->assertSame([], glob($backup . '/robots-*.txt'));
+        file_put_contents($path, file_get_contents($path) . '# concurrent owner edit');
+        try {
+            RobotsTxtManager::withdraw($path, $backup, $preview['sha256']);
+            $this->fail('Stale previews must be refused');
+        } catch (\RuntimeException $error) {
+            $this->assertStringContainsString('changed since preview', $error->getMessage());
+        }
+        $preview = RobotsTxtManager::withdrawalPreview($path);
+        RobotsTxtManager::withdraw($path, $backup, $preview['sha256']);
+        $this->assertSame($prefix . $suffix . '# concurrent owner edit', file_get_contents($path));
+        $this->assertCount(1, glob($backup . '/robots-*.txt'));
+        $this->assertFalse(RobotsTxtManager::withdraw($path, $backup, hash_file('sha256', $path))['changed']);
+    }
+
     public function testSymlinkTargetIsNeverFollowed(): void
     {
         $target = $this->directory . '/owner.txt';

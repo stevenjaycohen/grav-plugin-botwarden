@@ -100,6 +100,11 @@ form:
       rows: 6
       placeholder: "127.0.0.1\n::1\n# 192.168.0.0/24"
 
+      validate:
+        type: textarea
+        pattern: '\A(?:[ \t]*(?:\#[^\r\n]*|(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:/0*(?:[0-9]|[12][0-9]|3[0-2]))?|[0-9a-fA-F:.]*:[0-9a-fA-F:.]*(?:/0*(?:[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?)?[ \t]*(?:\r\n|\r|\n|\z))*\z'
+        message: Enter one IP or CIDR per line with an IPv4 prefix 0–32 or IPv6 prefix 0–128.
+
     trusted_proxy_preset:
       type: select
       label: Trusted Proxy Preset
@@ -119,6 +124,11 @@ form:
     # ------------------------------------------------------------------
     # Blacklist
     # ------------------------------------------------------------------
+      validate:
+        type: textarea
+        pattern: '\A(?:[ \t]*(?:\#[^\r\n]*|(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:/0*(?:[0-9]|[12][0-9]|3[0-2]))?|[0-9a-fA-F:.]*:[0-9a-fA-F:.]*(?:/0*(?:[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?)?[ \t]*(?:\r\n|\r|\n|\z))*\z'
+        message: Enter one IP or CIDR per line with an IPv4 prefix 0–32 or IPv6 prefix 0–128.
+
     blacklist_section:
       type: section
       title: Blacklist Settings
@@ -168,6 +178,24 @@ form:
         type: int
         min: 100
         max: 1000000
+
+    history_ttl:
+      type: number
+      label: History retention (seconds)
+      help: "History older than this is removed daily."
+      default: 2592000
+      validate:
+        type: int
+        min: 1
+
+    history_max_rows:
+      type: number
+      label: Maximum history rows
+      help: "Daily maintenance retains the newest events up to this limit."
+      default: 50000
+      validate:
+        type: int
+        min: 1
 
     local_ttl:
       type: number
@@ -292,6 +320,7 @@ form:
     dark_visitors.agent_types:
       type: checkboxes
       label: Agent Types to Block
+      help: "Selecting none retains the four default categories for compatibility. Disable the crawler source and robots.txt publishing to stop this policy."
       use: keys
       default:
         AI Assistant: true
@@ -307,7 +336,7 @@ form:
     dark_visitors.cache_ttl:
       type: number
       label: UA List Cache TTL (seconds)
-      help: How often to refresh the Known Agents UA list (default 24 hours)
+      help: "Minimum age before refreshing the Known Agents UA list; checked every five minutes. Default 24 hours; minimum one hour."
       default: 86400
       validate:
         type: int

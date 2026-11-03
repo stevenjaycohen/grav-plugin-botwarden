@@ -3,7 +3,7 @@ prefix: botwarden
 tools:
   - name: status
     title: botWarden status
-    description: Read counts of local blocks, history events, AbuseIPDB entries and Known Agents. Use before managing blocks or checking a migration.
+    description: Read integration readiness, delivery diagnostics, configuration errors and stored list counts. Use before managing blocks or checking a migration.
     method: GET
     path: /botwarden/status
     permission: api.super
@@ -32,6 +32,7 @@ tools:
       properties:
         limit: { type: integer, minimum: 1, maximum: 200, default: 50, description: Maximum number of entries to return. }
         offset: { type: integer, minimum: 0, default: 0, description: Number of entries to skip. }
+        search: { type: string, description: Optional exact IP address to find in the local list. }
       additionalProperties: false
 
   - name: history
@@ -99,4 +100,36 @@ tools:
       required: [confirm]
       properties:
         confirm: { type: boolean, description: Must be true after explicit user confirmation; false is rejected. }
+      additionalProperties: false
+
+  - name: refresh
+    title: Refresh a configured feed
+    description: Run the existing scheduler job for an enabled feed. May contact the configured provider and publish robots.txt if enabled; use only when authorized.
+    method: POST
+    path: /botwarden/refresh
+    permission: api.super
+    annotations:
+      readOnly: false
+      destructive: true
+    input:
+      type: object
+      required: [source]
+      properties:
+        source: { type: string, enum: [abuseipdb_bulk, dark_visitors] }
+      additionalProperties: false
+
+  - name: withdraw_robots
+    title: Preview or remove botWarden robots.txt policy
+    description: With publication disabled, preview removal of only the marked block. Confirm only after reviewing content and supplying its sha256. Preserves owner content and backups.
+    method: POST
+    path: /botwarden/robots/withdraw
+    permission: api.super
+    annotations:
+      readOnly: false
+      destructive: true
+    input:
+      type: object
+      properties:
+        confirm: { type: boolean, default: false }
+        sha256: { type: string, description: "Hash returned by the current preview, required for confirmation." }
       additionalProperties: false

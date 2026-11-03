@@ -44,6 +44,8 @@ final class ServiceIntegrationTest extends TestCase
         if ($response['status'] !== 200 || !str_contains($response['body'], 'Synthetic botWarden migration test site.')) {
             throw new \RuntimeException('Expected repository-local Grav fixture was not found');
         }
+        $diagnostics = json_decode($response['diagnostics'] ?? '{}', true);
+        if (!empty($diagnostics['opcache_enabled'])) throw new \RuntimeException('Start the disposable Grav server with -d opcache.enable=0; CLI cache clearing cannot invalidate the web process opcode cache');
         self::$originalConfig = is_file(self::$configPath) ? file_get_contents(self::$configPath) : null;
         self::$originalMode = is_file(self::$configPath) ? fileperms(self::$configPath) & 0777 : null;
         self::$originalMtime = is_file(self::$configPath) ? filemtime(self::$configPath) : null;
@@ -114,7 +116,7 @@ final class ServiceIntegrationTest extends TestCase
             foreach (scandir($backups) as $name) {
                 if ($name === '.' || $name === '..') continue;
                 $file = $backups . '/' . $name;
-                if (!preg_match('/^robots-\d{8}-\d{6}-[a-f0-9]{10}\.txt$/', $name) || is_link($file) || !is_file($file)) {
+                if (($name !== '.robots.lock' && !preg_match('/^robots-\d{8}-\d{6}-[a-f0-9]{10}\.txt$/', $name)) || is_link($file) || !is_file($file)) {
                     throw new \RuntimeException('Unexpected backup fixture; preserve evidence');
                 }
                 unlink($file);
@@ -200,14 +202,19 @@ final class ServiceIntegrationTest extends TestCase
     private static function http(string $path, string $ip = '8.8.8.8', string $agent = 'FixtureBrowser', array $headers = [], string $method = 'GET', ?string $requestBody = null, bool $forwarded = true): array
     {
         $handle = curl_init(self::$base . $path);
+        $diagnostics = null;
         $options = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15,
+            CURLOPT_HEADERFUNCTION => static function ($handle, string $line) use (&$diagnostics): int {
+                if (str_starts_with($line, 'X-Botwarden-Fixture-State: ')) $diagnostics = trim(substr($line, 26));
+                return strlen($line);
+            },
             CURLOPT_HTTPHEADER => array_merge($forwarded ? ['X-Forwarded-For: ' . $ip] : [], $headers),
             CURLOPT_USERAGENT => $agent, CURLOPT_CUSTOMREQUEST => $method];
         if ($requestBody !== null) $options[CURLOPT_POSTFIELDS] = $requestBody;
         curl_setopt_array($handle, $options);
         $body = curl_exec($handle);
         if ($body === false) throw new \RuntimeException('Local Grav request failed: ' . curl_error($handle));
-        $result = ['status' => curl_getinfo($handle, CURLINFO_RESPONSE_CODE), 'type' => curl_getinfo($handle, CURLINFO_CONTENT_TYPE), 'body' => $body];
+        $result = ['status' => curl_getinfo($handle, CURLINFO_RESPONSE_CODE), 'type' => curl_getinfo($handle, CURLINFO_CONTENT_TYPE), 'body' => $body, 'diagnostics' => $diagnostics];
         curl_close($handle);
         return $result;
     }
@@ -238,7 +245,7 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertTrue(self::helper(['operation' => 'visit'])['accepted']);
         $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
         $page = self::http('/');
-        $this->assertSame(200, $page['status']);
+        $this->assertSame(200, $page['status'], $page['diagnostics'] ?? 'No fixture diagnostics');
         $this->assertStringContainsString('text/html', (string)$page['type']);
         $this->assertStringContainsString('Synthetic botWarden migration test site.', $page['body']);
         $this->assertCount(2, $this->waitForVisits(2));
@@ -444,6 +451,83 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertStringContainsString('pruned', $result['output']);
     }
 
+    public function testConcurrentMissesReproduceOldDuplicatesAndNewClaimsSendOneLookup(): void
+    {
+        foreach ([true => 6, false => 1] as $legacy => $expectedCalls) {
+            $this->db->exec('DELETE FROM ip_cache');
+            file_put_contents(self::$work . '/requests.jsonl', '');
+            $workers = [];
+            try {
+                for ($worker = 0; $worker < 6; $worker++) {
+                    $process = proc_open([PHP_BINARY, __DIR__ . '/fixtures/ServiceFixture.php'],
+                        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+                    $this->assertIsResource($process);
+                    fwrite($pipes[0], json_encode(['operation' => 'lookup-race', 'worker' => $worker, 'legacy' => (bool)$legacy]));
+                    fclose($pipes[0]);
+                    $workers[] = [$process, $pipes];
+                }
+                $deadline = microtime(true) + 10;
+                while (count(glob(self::$work . '/race-*.ready')) < 6 && microtime(true) < $deadline) usleep(10000);
+                $this->assertCount(6, glob(self::$work . '/race-*.ready'));
+                file_put_contents(self::$work . '/race.go', 'go');
+            } finally {
+                // Release all workers even when the readiness assertion fails.
+                if (!is_file(self::$work . '/race.go')) file_put_contents(self::$work . '/race.go', 'go');
+                foreach ($workers as [$process, $pipes]) {
+                    $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+                    $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+                    $code = proc_close($process);
+                    $this->assertSame(0, $code, $err . $out);
+                    $this->assertSame('', $err);
+                }
+                foreach (glob(self::$work . '/race-*.ready') as $file) unlink($file);
+                unlink(self::$work . '/race.go');
+            }
+            $this->assertCount($expectedCalls, $this->requests());
+            if (!$legacy) $this->assertSame('block', $this->rows('ip_cache')[0]['decision']);
+        }
+    }
+
+    public function testKnownAgentsTtlControlsDownloadsAndPublishingCanUseFreshRules(): void
+    {
+        $this->assertTrue($this->job('botwarden-dark-visitors')['success']);
+        $this->assertCount(1, $this->requests());
+        $this->assertTrue($this->job('botwarden-dark-visitors')['success']);
+        $this->assertCount(1, $this->requests(), 'Fresh data must not trigger a download');
+        $this->db->exec("UPDATE metadata SET value = strftime('%s', 'now') - 7200 WHERE key = 'dark_visitors_updated'");
+        $this->assertTrue($this->job('botwarden-dark-visitors', 'valid', ['dark_visitors' => ['cache_ttl' => 3600]])['success']);
+        $this->assertCount(2, $this->requests());
+        $this->assertTrue($this->job('botwarden-dark-visitors', 'valid', ['dark_visitors' => ['cache_ttl' => 86400]])['success']);
+        $this->assertCount(2, $this->requests());
+    }
+
+    public function testReportBackoffStopsRequestsWithoutDroppingPendingRows(): void
+    {
+        $this->db->exec("INSERT INTO report_queue (ip, path) VALUES ('8.8.8.8', '/probe'), ('1.1.1.1', '/other')");
+        $started = time();
+        $this->assertFalse($this->job('botwarden-flush-reports', 'rate_limit')['success']);
+        $this->assertCount(1, $this->requests());
+        $this->assertGreaterThanOrEqual($started + 3600, (int)$this->db->querySingle("SELECT value FROM metadata WHERE key = 'reports_retry_after'"));
+        $this->assertTrue($this->job('botwarden-flush-reports', 'rate_limit')['success']);
+        $this->assertCount(1, $this->requests());
+        $this->assertCount(2, $this->rows('report_queue'));
+    }
+
+    public function testMalformedFiltersDoNotEmitVisitorWarningsAndQueriesStayOutOfLogs(): void
+    {
+        $this->configure(['enable_filtering' => true, 'filters' => '[', 'logging' => true]);
+        $response = self::http('/?private=synthetic-secret');
+        $this->assertSame(200, $response['status']);
+        $this->assertStringNotContainsString('Warning', $response['body']);
+        $log = self::$host . '/logs/grav.log';
+        clearstatcache(true, $log);
+        $offset = is_file($log) ? filesize($log) : 0;
+        $this->configure(['enable_filtering' => true, 'filters' => 'fixture-private', 'logging' => true]);
+        $this->assertSame(403, self::http('/fixture-private?private=synthetic-secret')['status']);
+        $handle = fopen($log, 'r'); fseek($handle, $offset); $newLog = stream_get_contents($handle); fclose($handle);
+        $this->assertStringNotContainsString('synthetic-secret', $newLog);
+    }
+
     public function testSuccessfulFeedJobsReplaceListsAndRecordSuccess(): void
     {
         $started = time();
@@ -453,7 +537,7 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertTrue($agents['success']);
         $this->assertCount(3, $this->rows('abuseipdb_bulk'));
         $this->assertCount(2, $this->rows('dark_visitors_agents'));
-        $this->assertCount(3, $this->rows('metadata'));
+        $this->assertCount(5, $this->rows('metadata'));
         $meta = array_column($this->rows('metadata'), 'value', 'key');
         $this->assertSame('3', $meta['abuseipdb_bulk_count']);
         $this->assertGreaterThanOrEqual($started, (int)$meta['abuseipdb_bulk_updated']);
@@ -472,7 +556,7 @@ final class ServiceIntegrationTest extends TestCase
     public static function failedFeeds(): iterable
     {
         foreach (['bulk' => 'botwarden-abuseipdb-cache', 'agents' => 'botwarden-dark-visitors'] as $service => $job) {
-            foreach (['network', 'unauthorized', 'server_error', 'rate_limit', 'empty', 'malformed'] as $scenario) {
+            foreach (['network', 'unauthorized', 'server_error', 'rate_limit', 'empty', 'malformed', 'oversized'] as $scenario) {
                 yield $service . ' ' . $scenario => [$job, $scenario];
             }
         }
@@ -483,9 +567,15 @@ final class ServiceIntegrationTest extends TestCase
     {
         $this->job('botwarden-abuseipdb-cache');
         $this->job('botwarden-dark-visitors');
-        $before = [$this->rows('abuseipdb_bulk'), $this->rows('dark_visitors_agents'), $this->rows('metadata')];
+        if ($job === 'botwarden-dark-visitors') $this->db->exec("UPDATE metadata SET value = '1' WHERE key = 'dark_visitors_updated'");
+        $before = [$this->rows('abuseipdb_bulk'), $this->rows('dark_visitors_agents')];
+        $metaBefore = array_column($this->rows('metadata'), 'value', 'key');
         $result = $this->job($job, $scenario);
-        $this->assertSame($before, [$this->rows('abuseipdb_bulk'), $this->rows('dark_visitors_agents'), $this->rows('metadata')]);
+        $this->assertSame($before, [$this->rows('abuseipdb_bulk'), $this->rows('dark_visitors_agents')]);
+        $meta = array_column($this->rows('metadata'), 'value', 'key');
+        $source = $job === 'botwarden-dark-visitors' ? 'dark_visitors' : 'abuseipdb_bulk';
+        $this->assertSame($metaBefore[$source . '_updated'], $meta[$source . '_updated']);
+        $this->assertNotEmpty($meta[$source . '_error']);
         $this->assertStringContainsString('failed', $result['output']);
         $this->assertFalse($result['success'], 'A failed fetch must not be recorded as a successful scheduler job');
         $this->assertSame('failure', $result['state']);
@@ -832,6 +922,7 @@ final class ServiceIntegrationTest extends TestCase
     {
         $this->db->exec("INSERT INTO report_queue (ip, path) VALUES ('198.51.100.30', '/synthetic-report')");
         for ($attempt = 1; $attempt <= 5; $attempt++) {
+            $this->db->exec("DELETE FROM metadata WHERE key = 'reports_retry_after'");
             $result = $this->job('botwarden-flush-reports', 'rate_limit');
             $this->assertFalse($result['success'], 'Deferred failed reports must be visible as a failed scheduler run');
             $this->assertStringContainsString('0 queued', $result['output']);
@@ -839,6 +930,7 @@ final class ServiceIntegrationTest extends TestCase
             if ($attempt < 5) $this->assertSame($attempt, $queue[0]['attempts']);
             else $this->assertSame([], $queue);
         }
+        $this->db->exec("DELETE FROM metadata WHERE key = 'reports_retry_after'");
         $this->db->exec("INSERT INTO report_queue (ip, path) VALUES ('198.51.100.31', '/synthetic-report')");
         $result = $this->job('botwarden-flush-reports');
         $this->assertTrue($result['success']);
@@ -948,11 +1040,12 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertSame($expectedLocal, array_column($this->rows('local'), 'ip'));
         $this->assertSame(['1.1.1.1'], array_column($this->rows('ip_cache'), 'ip'));
         $this->assertSame('block', $this->rows('ip_cache')[0]['decision']);
-        $this->assertSame($localTtl === 0 ? 403 : 200, self::http('/', '8.8.8.8')['status']);
+        $pageBefore = self::http('/', '8.8.8.8');
+        $this->assertSame($localTtl === 0 ? 403 : 200, $pageBefore['status'], json_encode([$result, $pageBefore['diagnostics']]));
         $this->assertSame(403, self::http('/', '9.9.9.9')['status']);
         $this->assertSame(403, self::http('/', '1.1.1.1')['status']);
         $page = self::http('/', '4.4.4.4');
-        $this->assertSame(200, $page['status']);
+        $this->assertSame(200, $page['status'], $page['diagnostics'] ?? 'No fixture diagnostics');
         $this->assertStringContainsString('text/html', (string)$page['type']);
         $this->assertStringContainsString('Synthetic botWarden migration test site.', $page['body']);
         $before = [$this->rows('local'), $this->rows('history'), $this->rows('ip_cache')];

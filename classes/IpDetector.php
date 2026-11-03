@@ -145,6 +145,9 @@ class IpDetector
         if ($bitsStr === null || $bitsStr === '') {
             return false;
         }
+        if (!preg_match('/\A[0-9]+\z/D', $bitsStr)) {
+            return false;
+        }
         $bits = (int)$bitsStr;
 
         $ipBin  = @inet_pton($ip);

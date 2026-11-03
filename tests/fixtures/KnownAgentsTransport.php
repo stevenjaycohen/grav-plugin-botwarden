@@ -6,6 +6,14 @@ namespace Grav\Plugin\Botwarden {
 
 function curl_init(?string $url = null): \CurlHandle|false
 {
+    if ((parse_url((string)$url, PHP_URL_HOST) === 'api.knownagents.com'
+        && parse_url((string)$url, PHP_URL_PATH) === '/robots-txts')
+        || parse_url((string)$url, PHP_URL_HOST) === 'api.abuseipdb.com') {
+        $service = parse_url((string)$url, PHP_URL_HOST) === 'api.knownagents.com' ? 'agents' : 'bulk';
+        $scenario = $_SERVER['HTTP_X_BOTWARDEN_FEED_SCENARIO'] ?? 'valid';
+        if (!in_array($scenario, ['valid', 'unauthorized'], true)) throw new \RuntimeException('Unexpected feed test scenario');
+        return \curl_init('http://127.0.0.1:8778/mock/' . $service . '/' . $scenario);
+    }
     if (parse_url((string)$url, PHP_URL_HOST) === 'cti.api.crowdsec.net'
         && preg_match('~^/v2/smoke/[0-9.]+$~', (string)parse_url((string)$url, PHP_URL_PATH))) {
         $scenario = $_SERVER['HTTP_X_BOTWARDEN_CTI_SCENARIO'] ?? 'block';
@@ -65,6 +73,15 @@ namespace {
         }
         $_SERVER['REMOTE_ADDR'] = $_SERVER['HTTP_X_BOTWARDEN_FIXTURE_PEER'];
     }
+    header_register_callback(static function (): void {
+        if (!class_exists(\Grav\Common\Grav::class, false)) return;
+        $config = \Grav\Common\Grav::instance()['config']->get('plugins.botwarden', []);
+        header('X-Botwarden-Fixture-State: ' . json_encode([
+            'sources' => $config['sources'] ?? [], 'filtering' => $config['enable_filtering'] ?? false,
+            'opcache_enabled' => function_exists('opcache_get_status') && (opcache_get_status(false)['opcache_enabled'] ?? false),
+            'client' => \Grav\Plugin\Botwarden\IpDetector::getClientIp(\Grav\Plugin\Botwarden\IpDetector::getTrustedProxies($config)),
+        ]));
+    });
     header('X-Botwarden-Fixture-Transport: loopback');
     return require $host . '/system/router.php';
 }

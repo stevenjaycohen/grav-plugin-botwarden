@@ -196,3 +196,63 @@ test('successful import hides the notice immediately and on later refreshes', as
   await fixture.page.refresh();
   assert.equal(fixture.elements['legacy-migration'].hidden, true);
 });
+
+test('history navigation and exact-IP search preserve the other pagination state', async () => {
+  const calls = [];
+  const fixture = pageFor(undefined, undefined, async (path, query) => {
+    calls.push([path, query]);
+    if (path.endsWith('/status')) return {};
+    if (path.endsWith('/legacy')) return {migration_complete:true};
+    return {entries:[], total:100, offset:query.offset};
+  });
+  fixture.page.render();
+  fixture.page.offset = 50;
+  fixture.elements['history-next'].listeners.click();
+  await fixture.refresh();
+  const query = path => calls.filter(([name]) => name.endsWith(path)).at(-1)[1];
+  assert.equal(query('/history').offset, 25);
+  assert.equal(query('/blocks').offset, 50);
+  fixture.page.shadowRoot.getElementById('search').value = '8.8.8.8';
+  fixture.elements.find.listeners.click();
+  await fixture.refresh();
+  assert.equal(query('/blocks').search, '8.8.8.8');
+  assert.equal(query('/blocks').offset, 0);
+  assert.equal(query('/history').offset, 25);
+});
+
+test('robots withdrawal previews as text and requires confirmation with its current hash', async () => {
+  const calls = [];
+  const fixture = pageFor(async () => true, async (path, body) => {
+    calls.push({path, ...body}); return {content:'Owner <policy>', sha256:'current-hash'};
+  });
+  await fixture.page.withdrawRobots();
+  assert.equal(fixture.elements['robots-preview'].textContent, 'Owner <policy>');
+  assert.equal(fixture.elements['robots-preview'].innerHTML, undefined);
+  assert.deepEqual(calls, [
+    {path:'/botwarden/robots/withdraw', confirm:false},
+    {path:'/botwarden/robots/withdraw', confirm:true, sha256:'current-hash'},
+  ]);
+  const cancelled = [];
+  const other = pageFor(async () => false, async (path, body) => { cancelled.push(body.confirm); return {content:'Preview'}; });
+  await other.page.withdrawRobots();
+  assert.deepEqual(cancelled, [false]);
+});
+
+
+test('history pruning moves to an available page without resetting the local list', async () => {
+  const offsets=[];
+  const fixture=pageFor(undefined, undefined, async (path, query) => {
+    if(path.endsWith('/status')) return {};
+    if(path.endsWith('/legacy')) return {migration_complete:true};
+    if(path.endsWith('/history')) { offsets.push(query.offset); return {entries:[], total:10, offset:query.offset}; }
+    return {entries:[], total:100, offset:query.offset};
+  });
+  fixture.page.refresh=fixture.refresh;
+  fixture.page.offset=50;
+  fixture.page.historyOffset=50;
+  await fixture.page.refresh();
+  assert.deepEqual(offsets,[50,0]);
+  assert.equal(fixture.page.offset,50);
+  assert.equal(fixture.page.historyOffset,0);
+  assert.equal(fixture.elements['history-prev'].disabled,true);
+});
