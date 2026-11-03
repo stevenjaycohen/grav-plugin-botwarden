@@ -10,12 +10,19 @@ $base = $repo . '/vendor/.botwarden-migration';
 $host = $base . '/grav';
 if (realpath($host) !== $host || !is_file($host . '/bin/grav')
     || is_file($base . '/integration-prepared.json')
+    || is_file($base . '/bundled-robots.txt')
     || is_dir($host . '/user/data/botwarden') || is_dir($host . '/user/data/grvhulk')
     || is_file($host . '/user/config/plugins/grvhulk.yaml') || glob($host . '/user/accounts/*.yaml')) {
     throw new RuntimeException('Expected a fresh repository-local release ZIP installation');
 }
 foreach (['sessions', 'tmp', 'security'] as $directory) {
     if (!is_dir($base . '/' . $directory)) mkdir($base . '/' . $directory, 0700);
+}
+// Preserve the download's stock policy outside the test document root;
+// robots.txt publication tests create and remove their own explicit fixtures.
+if (is_file($host . '/robots.txt')
+    && !rename($host . '/robots.txt', $base . '/bundled-robots.txt')) {
+    throw new RuntimeException('Cannot preserve the bundled robots.txt');
 }
 $files = [
     'config/system.yaml' => ['cache' => ['enabled' => false], 'debugger' => ['enabled' => false],

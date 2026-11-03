@@ -123,8 +123,12 @@ jobs:
           mkdir -p "$PWD/vendor/.botwarden-migration"
           mv "$GRAV_DIR" "$PWD/vendor/.botwarden-migration/grav"
           grav_root="$PWD/vendor/.botwarden-migration/grav"
+          repo_root="$PWD"
           php tests/fixtures/PrepareIntegration.php
-          GRAV_ENVIRONMENT=migration-test php -d opcache.enable=0 -S 127.0.0.1:8777 -t "$grav_root" "$PWD/tests/fixtures/KnownAgentsTransport.php" > "$RUNNER_TEMP/grav-integration.log" 2>&1 &
+          (
+            cd "$grav_root"
+            GRAV_ENVIRONMENT=migration-test exec php -d opcache.enable=0 -S 127.0.0.1:8777 "$repo_root/tests/fixtures/KnownAgentsTransport.php"
+          ) > "$RUNNER_TEMP/grav-integration.log" 2>&1 &
           grav_pid=$!
           php -d opcache.enable=0 -S 127.0.0.1:8778 "$PWD/tests/fixtures/ServiceFixture.php" > "$RUNNER_TEMP/providers.log" 2>&1 &
           provider_pid=$!
@@ -133,10 +137,15 @@ jobs:
           "$chrome" --headless=new --no-sandbox --disable-gpu --disable-background-networking --disable-component-update --disable-sync --no-first-run --host-resolver-rules='MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1' --remote-debugging-address=127.0.0.1 --remote-debugging-port=8877 --user-data-dir="$PWD/vendor/.botwarden-migration/chrome" about:blank > "$RUNNER_TEMP/browser.log" 2>&1 &
           browser_pid=$!
           trap 'kill "$grav_pid" "$provider_pid" "$browser_pid" 2>/dev/null || true' EXIT
+          ready=0
           for attempt in $(seq 1 30); do
-            if curl -fsS --max-time 2 http://127.0.0.1:8777/ -o /dev/null && curl -fsS --max-time 2 http://127.0.0.1:8877/json/version -o /dev/null; then break; fi
+            if curl -fsS --max-time 2 http://127.0.0.1:8777/ -o /dev/null && curl -fsS --max-time 2 http://127.0.0.1:8877/json/version -o /dev/null; then ready=1; break; fi
             sleep 1
           done
+          if [[ "$ready" != 1 ]]; then
+            tail -n 60 "$RUNNER_TEMP/grav-integration.log" "$RUNNER_TEMP/browser.log"
+            exit 1
+          fi
           BOTWARDEN_TEST_URL=http://127.0.0.1:8777 BOTWARDEN_BROWSER_URL=http://127.0.0.1:8877 TMPDIR="$PWD/vendor/.botwarden-migration/tmp" php -d sys_temp_dir="$PWD/vendor/.botwarden-migration/tmp" vendor/bin/phpunit --do-not-cache-result --fail-on-warning --display-warnings --display-errors
 
   release:
