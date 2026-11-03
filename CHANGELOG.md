@@ -1,7 +1,24 @@
-# Unreleased
+# 1.2.6
+## 2026-11-03
 
 1. [](#new)
     * Add AI Data Provider (third-party AI data suppliers) to Known Agents category choices and fresh-install defaults. Selected rules use the existing User-Agent blocking and robots.txt integration; explicit saved selections and the legacy four-category empty-selection fallback are preserved.
+    * Add feed readiness, first-refresh controls and delivery diagnostics to the dashboard, with independent history pagination, exact-IP search and manual/automatic and active/expired block labels.
+    * Add a previewed, explicitly confirmed withdrawal of botWarden's robots.txt block while retaining owner content and backups.
+
+2. [](#bugfix)
+    * Reject malformed CIDR prefixes and surface saved configuration/filter errors; omit query strings from URI diagnostics and prevent malformed filters from displaying PHP warnings to visitors.
+    * Honor the Known Agents cache TTL through the existing refresh job, including publishing cached rules when robots.txt publication is newly enabled.
+    * Bound and deduplicate the AbuseIPDB report queue, add expiry and delivery counters, and limit flush time, request timeouts and retry/backoff work.
+    * Coordinate concurrent CrowdSec lookups with expiring ownership claims and prevent late results from overwriting newer decisions.
+    * Enforce the existing 32 MiB HTTP response limit during transfer and preserve cached lists on failed downloads.
+    * Preserve unrelated YAML settings during emergency CLI whitelisting, check writes and report recovery outcomes accurately; record manual promotions, reason edits and CLI removals in block history.
+    * Coordinate robots.txt publication, reread owner content before replacement and refuse stale withdrawal previews.
+
+3. [](#improved)
+    * Explain blocked migration recovery while retaining overwrite refusal, backups, legacy guards and completion-marker handling.
+    * Extend local Grav, synthetic-provider and real-browser regression coverage and automate it in the release workflow.
+    * Document the repository-local development boundary and remove external-site verification requirements.
 
 # 1.2.5
 ## 2026-11-01

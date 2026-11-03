@@ -44,7 +44,7 @@ final class HttpClient
                 CURLOPT_CUSTOMREQUEST => strtoupper($method),
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_USERAGENT => 'botWarden/1.2.5',
+                CURLOPT_USERAGENT => 'botWarden/1.2.6',
             ];
             if ($body !== null) $options[CURLOPT_POSTFIELDS] = $body;
             curl_setopt_array($handle, $options);

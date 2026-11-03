@@ -1,6 +1,6 @@
 # botWarden — security and crawler policy management for Grav 2
 
-**Version 1.2.5** — maintained continuation of GRVHulk 1.1 for Grav 2.
+**Version 1.2.6** — maintained continuation of GRVHulk 1.1 for Grav 2.
 
 botWarden helps you block unwanted IP addresses, filter abusive requests and manage crawler access on your Grav site. Manage local blocks from Admin2 and optionally connect AbuseIPDB, CrowdSec or Known Agents.
 
