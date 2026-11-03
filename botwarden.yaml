@@ -48,6 +48,7 @@ dark_visitors:
   agent_types:
     - 'AI Assistant'
     - 'AI Data Scraper'
+    - 'AI Data Provider'
     - 'AI Search Crawler'
     - 'Undocumented AI Agent'
   cache_ttl: 86400

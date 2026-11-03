@@ -69,4 +69,23 @@ class NormalizeAgentTypesTest extends TestCase
     {
         $this->assertSame(['AI Search Crawler'], $this->normalize(['AI Search Crawler' => true]));
     }
+
+    public function testDataProviderCanBeSelectedAloneWithoutEnablingOtherCategories(): void
+    {
+        $this->assertSame(['AI Data Provider'], $this->normalize(['AI Data Provider']));
+        $this->assertSame(['AI Data Provider'], $this->normalize([
+            'AI Assistant' => false, 'AI Data Scraper' => false, 'AI Data Provider' => true,
+            'AI Search Crawler' => false, 'Undocumented AI Agent' => false,
+        ]));
+    }
+
+    public function testDataProviderCanBeDisabledIndependently(): void
+    {
+        $this->assertSame(['AI Data Scraper', 'Undocumented AI Agent'], $this->normalize([
+            'AI Assistant' => false, 'AI Data Scraper' => true, 'AI Data Provider' => false,
+            'AI Search Crawler' => false, 'Undocumented AI Agent' => true,
+        ]));
+        $this->assertSame(self::$defaults, $this->normalize(array_fill_keys(
+            array_merge(self::$defaults, ['AI Data Provider']), false)));
+    }
 }

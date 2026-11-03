@@ -82,6 +82,20 @@ botWarden exempts Admin2 and the versioned API from request blocking, using `plu
 ### Known Agents crawler rules
 
 Known Agents blocking is configured through `sources.dark_visitors` (preserving the legacy key).
+**Agent Types to Block** offers AI Assistant, AI Data Scraper, **AI Data Provider** (third-party AI data suppliers), AI Search Crawler, and Undocumented AI Agent. Fresh-install defaults include all five. Existing explicit selections, including four-category lists and checkbox maps, are preserved; upgrading does not opt an existing selection into AI Data Provider. The legacy empty/all-false fallback remains the original four categories.
+
+The intended policy for `stevenjaycohen.com` and `spokenrealms.com` is shown below for deliberate configuration, not automatic application:
+
+| Category | Block |
+| --- | --- |
+| AI Assistant | No |
+| AI Data Scraper | Yes |
+| AI Data Provider | Yes |
+| AI Search Crawler | No |
+| Undocumented AI Agent | Yes |
+
+Select categories in Admin2 and save. The existing Known Agents refresh sends their exact names to `/robots-txts`; returned rules feed both HTTP User-Agent blocking and the managed robots.txt block. Existing cache TTL and refresh frequency apply, and failed fetches preserve the last good rules. This option does not by itself establish coverage of every bot in a Known Agents missing-bot report.
+
 Publishing `robots.txt` rules is a separate opt-in setting:
 
 ```yaml

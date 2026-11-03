@@ -1,3 +1,8 @@
+# Unreleased
+
+1. [](#new)
+    * Add AI Data Provider (third-party AI data suppliers) to Known Agents category choices and fresh-install defaults. Selected rules use the existing User-Agent blocking and robots.txt integration; explicit saved selections and the legacy four-category empty-selection fallback are preserved.
+
 # 1.2.5
 ## 2026-11-01
 

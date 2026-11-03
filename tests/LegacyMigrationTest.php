@@ -34,6 +34,7 @@ final class LegacyMigrationTest extends TestCase
     {
         $path = $this->userDir . '/config/plugins/grvhulk.yaml';
         $original = "enabled: true\nlogging: true\nwhitelist: |\n  198.51.100.1\n";
+        $original .= "dark_visitors:\n  api_key: synthetic-legacy-token\n  agent_types:\n    - AI Assistant\n    - AI Data Scraper\n    - AI Search Crawler\n    - Undocumented AI Agent\n";
         file_put_contents($path, $original);
         $this->assertTrue(LegacyMigration::preview($this->userDir)['can_migrate']);
         $this->assertFalse(LegacyMigration::preview($this->userDir)['migration_complete']);
@@ -44,6 +45,8 @@ final class LegacyMigrationTest extends TestCase
         $new = file_get_contents($this->userDir . '/config/plugins/botwarden.yaml');
         $this->assertStringStartsWith("enabled: false\n", $new);
         $this->assertStringContainsString("logging: true\n", $new);
+        $this->assertSame(str_replace('enabled: true', 'enabled: false', $original), $new,
+            'Migration must preserve the token and explicit four-category selection without adding a category');
         $this->assertNotEmpty(glob($this->userDir . '/data/botwarden/backups/grvhulk-*.yaml'));
         $this->assertFalse(LegacyMigration::preview($this->userDir)['can_migrate']);
         $this->assertFileExists($this->userDir . '/data/botwarden/migration-complete.json');

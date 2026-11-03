@@ -325,11 +325,13 @@ form:
       default:
         AI Assistant: true
         AI Data Scraper: true
+        AI Data Provider: true
         AI Search Crawler: true
         Undocumented AI Agent: true
       options:
         AI Assistant: "AI Assistant (ChatGPT, Claude, Gemini crawlers)"
         AI Data Scraper: "AI Data Scraper (training data harvesters)"
+        AI Data Provider: "AI Data Provider (third-party AI data suppliers)"
         AI Search Crawler: "AI Search Crawler (Perplexity, You.com, etc.)"
         Undocumented AI Agent: "Undocumented AI Agent"
 

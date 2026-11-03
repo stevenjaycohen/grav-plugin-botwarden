@@ -488,6 +488,112 @@ final class ServiceIntegrationTest extends TestCase
         }
     }
 
+    public function testKnownAgentsBlueprintAndFreshDefaultsExposeFiveCategories(): void
+    {
+        require_once self::$host . '/vendor/autoload.php';
+        $repo = dirname(__DIR__);
+        $blueprint = \Symfony\Component\Yaml\Yaml::parseFile($repo . '/blueprints.yaml');
+        $field = $blueprint['form']['fields']['dark_visitors.agent_types'];
+        $expected = ['AI Assistant', 'AI Data Scraper', 'AI Data Provider', 'AI Search Crawler', 'Undocumented AI Agent'];
+        $this->assertSame($expected, array_keys($field['options']));
+        $this->assertSame('AI Data Provider (third-party AI data suppliers)', $field['options']['AI Data Provider']);
+        $this->assertSame(array_fill_keys($expected, true), $field['default']);
+        $defaults = \Symfony\Component\Yaml\Yaml::parseFile($repo . '/botwarden.yaml');
+        $this->assertSame($expected, $defaults['dark_visitors']['agent_types']);
+    }
+
+    public static function knownAgentsCategorySelections(): iterable
+    {
+        $four = ['AI Assistant', 'AI Data Scraper', 'AI Search Crawler', 'Undocumented AI Agent'];
+        $five = ['AI Assistant', 'AI Data Scraper', 'AI Data Provider', 'AI Search Crawler', 'Undocumented AI Agent'];
+        yield 'fresh defaults' => [null, $five];
+        yield 'existing four-category list' => [$four, $four];
+        yield 'existing four-category checkbox map' => [[
+            'AI Assistant' => false, 'AI Data Scraper' => true, 'AI Search Crawler' => false, 'Undocumented AI Agent' => true,
+        ], ['AI Data Scraper', 'Undocumented AI Agent']];
+        yield 'provider only list' => [['AI Data Provider'], ['AI Data Provider']];
+        $map = array_fill_keys($five, false);
+        $map['AI Data Provider'] = true;
+        yield 'provider only checkbox map' => [$map, ['AI Data Provider']];
+        $map['AI Data Provider'] = false; $map['AI Data Scraper'] = true; $map['Undocumented AI Agent'] = true;
+        yield 'provider disabled independently' => [$map, ['AI Data Scraper', 'Undocumented AI Agent']];
+        $map['AI Data Provider'] = true;
+        yield 'intended site policy' => [$map, ['AI Data Scraper', 'AI Data Provider', 'Undocumented AI Agent']];
+    }
+
+    #[DataProvider('knownAgentsCategorySelections')]
+    public function testSelectedCategoriesReachApiAndDriveBlockingAndRobots(?array $saved, array $expected): void
+    {
+        $config = ['sources' => ['dark_visitors' => true], 'robots_txt' => ['enabled' => true],
+            'dark_visitors' => ['api_key' => 'synthetic-fixture-key']];
+        if ($saved !== null) $config['dark_visitors']['agent_types'] = $saved;
+        $this->configure($config);
+        $this->assertSame($saved ?? $expected, self::helper(['operation' => 'agent-config'])['agent_types'], 'Grav must preserve an explicit selection');
+        $owner = "# Independent owner policy\nUser-agent: OwnerBot\nAllow: /\n";
+        $this->writeRobotsFixture($owner);
+        $result = self::helper(['operation' => 'configured-job', 'id' => 'botwarden-dark-visitors', 'scenario' => 'category_rules']);
+        $this->assertTrue($result['success'], $result['output']);
+        $requests = $this->requests();
+        $this->assertCount(1, $requests);
+        $this->assertSame('POST', $requests[0]['method']);
+        $this->assertSame('application/json', $requests[0]['content_type']);
+        $this->assertSame($expected, json_decode($requests[0]['body'], true)['agent_types']);
+        $rules = array_column($this->rows('dark_visitors_agents'), 'user_agent');
+        $robots = self::http('/robots.txt');
+        $this->assertSame(200, $robots['status']);
+        $this->assertStringStartsWith($owner, $robots['body']);
+        $agents = ['AI Assistant' => 'FixtureAssistant', 'AI Data Scraper' => 'FixtureScraper',
+            'AI Data Provider' => 'FixtureDataProvider', 'AI Search Crawler' => 'FixtureSearch', 'Undocumented AI Agent' => 'FixtureUndocumented'];
+        $this->assertCount(count($expected), $rules);
+        foreach ($agents as $type => $agent) {
+            $selected = in_array($type, $expected, true);
+            $this->assertSame($selected, in_array($agent, $rules, true), $type);
+            $directive = "User-agent: {$agent}\nDisallow: /";
+            if ($selected) $this->assertStringContainsString($directive, $robots['body']);
+            else $this->assertStringNotContainsString($directive, $robots['body']);
+            $this->assertSame($selected ? 403 : 200, self::http('/', '8.8.8.8', $agent . '/1.0')['status'], $type);
+        }
+    }
+
+    public function testDisablingDataProviderRemovesItsRulesOnTheNextDueRefresh(): void
+    {
+        $map = ['AI Assistant' => false, 'AI Data Scraper' => true, 'AI Data Provider' => true,
+            'AI Search Crawler' => false, 'Undocumented AI Agent' => false];
+        $config = ['sources' => ['dark_visitors' => true], 'robots_txt' => ['enabled' => true],
+            'dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'agent_types' => $map]];
+        $this->writeRobotsFixture("# Owner policy\n");
+        $this->configure($config);
+        $this->assertTrue(self::helper(['operation' => 'configured-job', 'id' => 'botwarden-dark-visitors', 'scenario' => 'category_rules'])['success']);
+        $this->assertSame(403, self::http('/', '8.8.8.8', 'FixtureDataProvider/1.0')['status']);
+        $config['dark_visitors']['agent_types']['AI Data Provider'] = false;
+        $this->configure($config);
+        // Advance only this disposable cache timestamp; scheduling/TTL stay unchanged.
+        $this->db->exec("UPDATE metadata SET value = '1' WHERE key = 'dark_visitors_updated'");
+        $this->assertTrue(self::helper(['operation' => 'configured-job', 'id' => 'botwarden-dark-visitors', 'scenario' => 'category_rules'])['success']);
+        $this->assertSame(['AI Data Scraper'], json_decode($this->requests()[1]['body'], true)['agent_types']);
+        $this->assertSame(['FixtureScraper'], array_column($this->rows('dark_visitors_agents'), 'user_agent'));
+        $this->assertStringNotContainsString('FixtureDataProvider', self::http('/robots.txt')['body']);
+        $this->assertSame(200, self::http('/', '8.8.8.8', 'FixtureDataProvider/1.0')['status']);
+        $this->assertSame(403, self::http('/', '8.8.8.8', 'FixtureScraper/1.0')['status']);
+    }
+
+    public function testFailedDataProviderRefreshPreservesBlockingAndPublishedRules(): void
+    {
+        $this->writeRobotsFixture("# Owner policy\n");
+        $this->configure(['sources' => ['dark_visitors' => true], 'robots_txt' => ['enabled' => true],
+            'dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'agent_types' => ['AI Data Provider']]]);
+        $this->assertTrue(self::helper(['operation' => 'configured-job', 'id' => 'botwarden-dark-visitors', 'scenario' => 'category_rules'])['success']);
+        $rules = $this->rows('dark_visitors_agents'); $robots = self::http('/robots.txt')['body'];
+        $this->db->exec("UPDATE metadata SET value = '1' WHERE key = 'dark_visitors_updated'");
+        foreach (['unauthorized', 'server_error', 'empty', 'malformed'] as $scenario) {
+            $result = self::helper(['operation' => 'configured-job', 'id' => 'botwarden-dark-visitors', 'scenario' => $scenario]);
+            $this->assertFalse($result['success'], $scenario);
+            $this->assertSame($rules, $this->rows('dark_visitors_agents'));
+            $this->assertSame($robots, self::http('/robots.txt')['body']);
+            $this->assertSame(403, self::http('/', '8.8.8.8', 'FixtureDataProvider/1.0')['status']);
+        }
+    }
+
     public function testKnownAgentsTtlControlsDownloadsAndPublishingCanUseFreshRules(): void
     {
         $this->assertTrue($this->job('botwarden-dark-visitors')['success']);

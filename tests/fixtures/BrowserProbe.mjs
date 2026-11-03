@@ -9,14 +9,15 @@ const sources = {
     'same-origin': 'http://127.0.0.1:8777/',
     none: null,
     dashboard: null,
+    'agent-settings': null,
 };
 assert.ok(Object.hasOwn(sources, source));
-assert.ok(['image', 'link', 'navigate', 'dashboard'].includes(action));
+assert.ok(['image', 'link', 'navigate', 'dashboard', 'agent-settings'].includes(action));
 assert.equal(action === 'navigate', source === 'none');
 assert.equal(process.env.BOTWARDEN_BROWSER_URL, 'http://127.0.0.1:8877');
 
 const endpoint = process.env.BOTWARDEN_BROWSER_URL;
-const target = source === 'dashboard' ? 'http://127.0.0.1:8777/admin/plugin/botwarden' : 'http://127.0.0.1:8777/.env';
+const target = source === 'agent-settings' ? 'http://127.0.0.1:8777/admin/plugins/botwarden' : source === 'dashboard' ? 'http://127.0.0.1:8777/admin/plugin/botwarden' : 'http://127.0.0.1:8777/.env';
 const page = await (await fetch(`${endpoint}/json/new?about:blank`, {method: 'PUT'})).json();
 assert.ok(page.webSocketDebuggerUrl.startsWith('ws://127.0.0.1:8877/'));
 const socket = new WebSocket(page.webSocketDebuggerUrl);
@@ -32,7 +33,7 @@ function command(method, params = {}) {
         const timeout = setTimeout(() => {
             pending.delete(id);
             reject(new Error(`Timed out: ${method}`));
-        }, action === 'dashboard' ? 20000 : 10000);
+        }, ['dashboard', 'agent-settings'].includes(action) ? 20000 : 10000);
         pending.set(id, {resolve, reject, timeout});
         socket.send(JSON.stringify({id, method, params}));
     });
@@ -90,7 +91,7 @@ try {
         const method = allowed.includes(new URL(request.url).origin) ? 'Fetch.continueRequest' : 'Fetch.failRequest';
         void command(method, {requestId, ...(method === 'Fetch.failRequest' ? {errorReason: 'BlockedByClient'} : {})}).catch(() => { /* Navigating away may cancel an intercepted request. */ });
     });
-    if (source === 'dashboard') {
+    if (['dashboard', 'agent-settings'].includes(source)) {
         const privateFixture = JSON.parse(readFileSync(new URL('../../vendor/.botwarden-migration/security/credentials.json', import.meta.url)));
         await command('Storage.clearDataForOrigin', {origin:'http://127.0.0.1:8777', storageTypes:'all'});
         await command('Network.clearBrowserCookies');
@@ -121,7 +122,33 @@ try {
           })()`});
         assert.equal(login.exceptionDetails, undefined, 'Login form evaluation failed');
         assert.equal(login.result.value.error, undefined, login.result.value.error);
-        const result = await command('Runtime.evaluate', {awaitPromise:true, returnByValue:true, expression:`
+        const result = await command('Runtime.evaluate', {awaitPromise:true, returnByValue:true, expression: source === 'agent-settings' ? `
+          (async () => {
+            const names=['AI Assistant','AI Data Scraper','AI Data Provider','AI Search Crawler','Undocumented AI Agent'];
+            function controls() {
+              return names.map(name => {
+                const label=Array.from(document.querySelectorAll('label')).find(element => {
+                  const text=element.textContent.trim(); return text===name || text.startsWith(name+' (');
+                });
+                return label?.control || label?.querySelector('input[type="checkbox"]');
+              });
+            }
+            const deadline=Date.now()+15000;
+            while(Date.now()<deadline) {
+              const inputs=controls();
+              if(inputs.every(input=>input?.type==='checkbox')) {
+                const before=inputs.map(input=>input.checked);
+                if(JSON.stringify(before)!==JSON.stringify([false,true,false,false,true])) return {error:'Saved category selection changed in the settings UI',checked:before};
+                inputs[2].click(); await new Promise(r=>setTimeout(r,0));
+                if(JSON.stringify(controls().map(input=>input.checked))!==JSON.stringify([false,true,true,false,true])) return {error:'Enabling AI Data Provider changed another category'};
+                controls()[2].click(); await new Promise(r=>setTimeout(r,0));
+                if(JSON.stringify(controls().map(input=>input.checked))!==JSON.stringify(before)) return {error:'Disabling AI Data Provider did not restore the saved category choices'};
+                return {settings:true,categories:names,independentToggle:true};
+              }
+              await new Promise(r=>setTimeout(r,100));
+            }
+            return {error:'Known Agents category controls did not render',url:location.pathname};
+          })()` : `
           (async () => {
             function root(container=document) {
               for (const element of container.querySelectorAll('*')) {
@@ -156,13 +183,20 @@ try {
         assert.deepEqual(errors, []);
         const observed=result.result.value;
         assert.equal(observed.error, undefined, JSON.stringify(observed));
-        assert.equal(observed.rendered, true);
-        assert.equal(observed.historyPaged, true);
-        assert.equal(observed.searchFound, true);
-        assert.equal(observed.hasType, true);
-        assert.equal(observed.hasStatus, true);
-        assert.equal(observed.message, '');
-        console.log(JSON.stringify({dashboard:true, historyPaged:true, searchFound:true, browser:(await command('Browser.getVersion')).product}));
+        if(source === 'agent-settings') {
+            assert.equal(observed.settings,true);
+            assert.equal(observed.categories.length,5);
+            assert.equal(observed.independentToggle,true);
+            console.log(JSON.stringify({settings:true,categories:observed.categories,independentToggle:true,browser:(await command('Browser.getVersion')).product}));
+        } else {
+            assert.equal(observed.rendered, true);
+            assert.equal(observed.historyPaged, true);
+            assert.equal(observed.searchFound, true);
+            assert.equal(observed.hasType, true);
+            assert.equal(observed.hasStatus, true);
+            assert.equal(observed.message, '');
+            console.log(JSON.stringify({dashboard:true, historyPaged:true, searchFound:true, browser:(await command('Browser.getVersion')).product}));
+        }
     } else {
     if (sources[source]) {
         const loaded = event('Page.loadEventFired', () => true);
@@ -199,7 +233,7 @@ try {
     }));
     }
 } finally {
-    if(source === 'dashboard') {
+    if(['dashboard', 'agent-settings'].includes(source)) {
         await command('Storage.clearDataForOrigin', {origin:'http://127.0.0.1:8777', storageTypes:'all'});
         await command('Network.clearBrowserCookies');
     }

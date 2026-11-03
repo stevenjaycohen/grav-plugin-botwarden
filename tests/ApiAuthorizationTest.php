@@ -310,6 +310,49 @@ final class ApiAuthorizationTest extends TestCase
         }
     }
 
+    public function testKnownAgentsSettingsRenderFiveIndependentCategoriesWithoutChangingSavedChoices(): void
+    {
+        if (getenv('BOTWARDEN_BROWSER_URL') !== 'http://127.0.0.1:8877') $this->markTestSkipped('Opt in to the localhost browser fixture');
+        $path = self::$host . '/user/config/plugins/botwarden.yaml';
+        $original = is_file($path) ? file_get_contents($path) : null;
+        $mode = $original !== null ? fileperms($path) & 0777 : null;
+        $mtime = $original !== null ? filemtime($path) : null;
+        $saved = ['AI Assistant' => false, 'AI Data Scraper' => true, 'AI Search Crawler' => false, 'Undocumented AI Agent' => true];
+        $beforeSessions = glob(dirname(self::$work) . '/sessions/sess_*');
+        try {
+            file_put_contents($path, json_encode(['enabled' => true, 'dark_visitors' => ['agent_types' => $saved]]));
+            self::helper('clear_cache');
+            $before = file_get_contents($path);
+            $process = proc_open(['node', __DIR__ . '/fixtures/BrowserProbe.mjs', 'agent-settings', 'agent-settings'],
+                [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            $this->assertIsResource($process);
+            $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+            $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+            $this->assertSame(0, proc_close($process), $err);
+            $this->assertSame('', $err);
+            $result = json_decode($out, true, 512, JSON_THROW_ON_ERROR);
+            $this->assertTrue($result['settings']);
+            $this->assertTrue($result['independentToggle']);
+            $this->assertSame(['AI Assistant', 'AI Data Scraper', 'AI Data Provider', 'AI Search Crawler', 'Undocumented AI Agent'], $result['categories']);
+            $this->assertSame($before, file_get_contents($path), 'Rendering and unsaved toggles must preserve the saved selection');
+            $headers = self::headers('unscoped_super');
+            foreach ([true, false] as $enabled) {
+                $selection = $saved; $selection['AI Data Provider'] = $enabled;
+                $response = self::request('PATCH', '/api/v1/config/plugins/botwarden', ['dark_visitors' => ['agent_types' => $selection]], $headers);
+                $this->assertSame(200, $response['status']);
+                $actual = self::request('GET', '/api/v1/config/plugins/botwarden', null, $headers)['json']['data']['dark_visitors']['agent_types'];
+                $this->assertSame($selection, $actual);
+            }
+        } finally {
+            if ($original === null) { if (is_file($path)) unlink($path); }
+            else { file_put_contents($path, $original); chmod($path, $mode); touch($path, $mtime); }
+            self::helper('clear_cache');
+            foreach (array_diff(glob(dirname(self::$work) . '/sessions/sess_*'), $beforeSessions) as $path) {
+                if (is_file($path) && !is_link($path)) unlink($path);
+            }
+        }
+    }
+
     public static function forgedSessionWrites(): iterable
     {
         foreach (['foreign_origin', 'null_origin', 'foreign_referrer', 'bad_origin_good_referrer', 'missing_origin_form', 'invalid_key_origin', 'invalid_token_origin'] as $scenario) {

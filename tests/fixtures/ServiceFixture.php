@@ -31,7 +31,7 @@ namespace {
     if (PHP_SAPI === 'cli-server') {
         header('Content-Type: application/json');
         $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found|oversized)(?:/v1/decisions)?$~', $path, $match)) {
+        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found|oversized|category_rules)(?:/v1/decisions)?$~', $path, $match)) {
             http_response_code(404);
             echo '{}';
             return;
@@ -60,6 +60,19 @@ namespace {
         }
         if ($scenario === 'empty') { echo ''; return; }
         if ($scenario === 'malformed') { echo '<html>synthetic upstream error</html>'; return; }
+        if ($service === 'agents' && $scenario === 'category_rules') {
+            $types = json_decode($body, true)['agent_types'] ?? [];
+            $agents = ['AI Assistant' => 'FixtureAssistant', 'AI Data Scraper' => 'FixtureScraper',
+                'AI Data Provider' => 'FixtureDataProvider', 'AI Search Crawler' => 'FixtureSearch',
+                'Undocumented AI Agent' => 'FixtureUndocumented'];
+            if (!$types || array_diff($types, array_keys($agents))) {
+                http_response_code(400);
+                return;
+            }
+            header('Content-Type: text/plain');
+            foreach ($types as $type) echo "User-agent: {$agents[$type]}\nDisallow: /\n";
+            return;
+        }
         if ($service === 'visits') {
             $visits = json_decode($body, true);
             if ($_SERVER['REQUEST_METHOD'] !== 'POST' || ($_SERVER['CONTENT_TYPE'] ?? '') !== 'application/json'
@@ -97,13 +110,18 @@ namespace {
         echo json_encode(['cleared' => true]);
         exit;
     }
+    if ($input['operation'] === 'agent-config') {
+        echo json_encode(['agent_types' => $grav['config']->get('plugins.botwarden.dark_visitors.agent_types')], JSON_THROW_ON_ERROR);
+        exit;
+    }
     $defaults = Symfony\Component\Yaml\Yaml::parseFile($repo . '/botwarden.yaml');
     $defaults['sources'] = array_fill_keys(array_keys($defaults['sources']), false);
     $config = array_replace_recursive($defaults, $input['config'] ?? []);
+    if ($input['operation'] === 'configured-job') $config = (array)$grav['config']->get('plugins.botwarden');
     $grav['config']->set('plugins.botwarden', $config);
     $grav['plugins']->init();
     $grav->fireEvent('onPluginsInitialized');
-    $operation = $input['operation'];
+    $operation = $input['operation'] === 'configured-job' ? 'job' : $input['operation'];
     if ($operation === 'jobs' || $operation === 'job') {
         $scheduler = $grav['scheduler'];
         $scheduler->initializeJobs();
