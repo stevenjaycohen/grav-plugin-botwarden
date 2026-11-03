@@ -26,7 +26,12 @@ $files = [
     'themes/migration-fixture/blueprints.yaml' => ['name' => 'Migration fixture', 'slug' => 'migration-fixture', 'type' => 'theme', 'version' => '1.0.0'],
     'themes/migration-fixture/migration-fixture.yaml' => ['enabled' => true],
 ];
-require $host . '/vendor/autoload.php';
+// Grav derives its root while Composer loads system/defines.php.
+// Enter the fixture before loading any Grav classes or constants.
+chdir($host);
+define('GRAV_CLI', true);
+define('GRAV_REQUEST_TIME', microtime(true));
+$loader = require $host . '/vendor/autoload.php';
 foreach ($files as $path => $content) {
     $path = $host . '/user/' . $path;
     if (!is_dir(dirname($path))) mkdir(dirname($path), 0750, true);
@@ -44,10 +49,7 @@ $db = new SQLite3($host . '/user/data/grvhulk/grvhulk.sqlite');
 $db->enableExceptions(true);
 $db->exec(file_get_contents(__DIR__ . '/grvhulk-1.1.sql'));
 $db->close();
-chdir($host);
-define('GRAV_CLI', true);
-define('GRAV_REQUEST_TIME', microtime(true));
-$grav = Grav\Common\Grav::instance(['loader' => require $host . '/vendor/autoload.php']);
+$grav = Grav\Common\Grav::instance(['loader' => $loader]);
 $grav->setup('migration-test')->initializeCli();
 $account = $grav['accounts']->load('botwarden-ci-owner');
 if ($account->exists()) throw new RuntimeException('Fixture owner already exists');
