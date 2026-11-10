@@ -1,3 +1,14 @@
+# 1.2.7
+## 2026-11-10
+
+1. [](#bugfix)
+    * Pause new Known Agents visit reports for five minutes after a recorded delivery failure instead of attempting delivery on every page during an outage. Retain the three-second timeout, unchanged page responses and no queued retries.
+    * Save visit counters, timestamps and cooldown state atomically. Allow brief SQLite contention to clear, skip diagnostics at debug level for longer locks and identify unexpected persistence errors by exception type and code.
+    * Extract only Admin2's configuration object in route integration tests when the same script also assigns a CSP nonce.
+
+2. [](#improved)
+    * Run the Known Agents refresh check every 15 minutes and flush queued AbuseIPDB reports every 30 minutes.
+
 # 1.2.6
 ## 2026-11-03
 

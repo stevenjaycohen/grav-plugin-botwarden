@@ -31,7 +31,7 @@ namespace {
     if (PHP_SAPI === 'cli-server') {
         header('Content-Type: application/json');
         $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found|oversized|category_rules)(?:/v1/decisions)?$~', $path, $match)) {
+        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found|oversized|category_rules|timeout)(?:/v1/decisions)?$~', $path, $match)) {
             http_response_code(404);
             echo '{}';
             return;
@@ -45,6 +45,7 @@ namespace {
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
             'project_token_matches' => ($_SERVER['HTTP_AUTHORIZATION'] ?? '') === 'Bearer synthetic-fixture-key',
         ], JSON_THROW_ON_ERROR) . "\n", FILE_APPEND | LOCK_EX);
+        if ($scenario === 'timeout') sleep(4);
         if (in_array($scenario, ['unauthorized', 'server_error', 'rate_limit', 'not_found'], true)) {
             http_response_code(['unauthorized' => 401, 'server_error' => 503, 'rate_limit' => 429, 'not_found' => 404][$scenario]);
             echo '{"error":"synthetic upstream failure"}';

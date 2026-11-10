@@ -440,6 +440,29 @@ final class ServiceIntegrationTest extends TestCase
         $this->assertCount(1, $this->waitForVisits(1));
     }
 
+    public function testKnownAgentsTimeoutPausesNewReportsAndRecoversAfterCooldown(): void
+    {
+        $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
+        $response = self::http('/', '198.51.100.8', 'FixtureBrowser', ['X-Botwarden-Visit-Scenario: timeout']);
+        $this->assertSame(200, $response['status']);
+        $this->assertStringContainsString('Synthetic botWarden migration test site.', $response['body']);
+        // The next request waits for the preceding shutdown hook to finish.
+        $this->assertSame(200, self::http('/')['status']);
+        $this->assertSame(200, self::http('/api/v1/ping')['status']);
+        $this->assertCount(1, $this->waitForVisits(1), 'A timeout must not trigger another delivery on the next page');
+        $this->assertSame('1', \Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_failed'));
+        $retryAfter = (int)\Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_retry_after');
+        $this->assertGreaterThan(time(), $retryAfter);
+        $this->assertLessThanOrEqual(time() + 300, $retryAfter);
+
+        \Grav\Plugin\Botwarden\BotwardenDatabase::setMeta($this->db, 'visits_retry_after', (string)(time() - 1));
+        $this->assertSame(200, self::http('/')['status']);
+        $this->assertSame(200, self::http('/api/v1/ping')['status']);
+        $this->assertCount(2, $this->waitForVisits(2));
+        $this->assertSame('1', \Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_accepted'));
+        $this->assertSame('0', \Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_retry_after'));
+    }
+
     public function testDefaultAndEnabledSchedulerJobs(): void
     {
         $defaults = self::helper(['operation' => 'jobs']);

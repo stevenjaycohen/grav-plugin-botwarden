@@ -25,7 +25,7 @@ function curl_init(?string $url = null): \CurlHandle|false
     if (parse_url((string)$url, PHP_URL_HOST) === 'api.knownagents.com'
         && parse_url((string)$url, PHP_URL_PATH) === '/visits') {
         $scenario = $_SERVER['HTTP_X_BOTWARDEN_VISIT_SCENARIO'] ?? 'valid';
-        if (!in_array($scenario, ['valid', 'unauthorized', 'server_error', 'malformed'], true)) {
+        if (!in_array($scenario, ['valid', 'unauthorized', 'server_error', 'malformed', 'timeout'], true)) {
             throw new \RuntimeException('Unexpected Known Agents test scenario');
         }
         return \curl_init('http://127.0.0.1:8778/mock/visits/' . $scenario);

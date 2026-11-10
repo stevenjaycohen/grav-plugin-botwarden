@@ -78,34 +78,64 @@ class BotwardenPlugin extends Plugin
             if ($this->isAdmin() || $this->isManagementPath($this->grav['uri']->route())) {
                 return;
             }
+            if ($this->visitReportingDeferred()) return;
             $started = (float)($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
             $visit = DarkVisitorsClient::visit($_SERVER, headers_list(), http_response_code() ?: 200,
                 (microtime(true) - $started) * 1000);
             (new DarkVisitorsClient(trim((string)$config['dark_visitors']['api_key'])))->reportVisit($visit);
             $this->recordVisitOutcome(true);
         } catch (\Throwable $error) {
-            $this->recordVisitOutcome(false);
+            $saved = $this->recordVisitOutcome(false);
             // Reporting failures must never change the visitor's response.
-            $this->grav['log']->warning('[botWarden] Known Agents visit reporting failed: ' . $error->getMessage());
+            $this->grav['log']->warning('[botWarden] Known Agents visit reporting failed: ' . $error->getMessage()
+                . ($saved ? '; new visit reports paused for five minutes' : ''));
         }
     }
 
-    private function recordVisitOutcome(bool $accepted): void
+    private function visitReportingDeferred(): bool
+    {
+        try {
+            $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
+            if (!is_file($dataDir . '/botwarden.sqlite')) return false;
+            return (int)BotwardenDatabase::getMeta(BotwardenDatabase::getInstance($dataDir), 'visits_retry_after') > time();
+        } catch (\Throwable $error) {
+            // Unavailable diagnostics must not prevent best-effort visit delivery.
+            return false;
+        }
+    }
+
+    private function recordVisitOutcome(bool $accepted): bool
     {
         try {
             $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
             // Diagnostics must not create a destination that prevents a legacy import.
-            if (!is_file($dataDir . '/botwarden.sqlite')) return;
+            if (!is_file($dataDir . '/botwarden.sqlite')) return false;
             $db = BotwardenDatabase::getInstance($dataDir);
-            $db->busyTimeout(0);
+            $db->busyTimeout(100);
+            $transaction = false;
             try {
+                $db->exec('BEGIN IMMEDIATE');
+                $transaction = true;
                 BotwardenDatabase::incrementMeta($db, $accepted ? 'visits_accepted' : 'visits_failed');
                 BotwardenDatabase::setMeta($db, 'visits_last_attempt', (string)time());
+                BotwardenDatabase::setMeta($db, 'visits_retry_after', $accepted ? '0' : (string)(time() + 300));
+                $db->exec('COMMIT');
+                $transaction = false;
+            } catch (\Throwable $error) {
+                if ($transaction) $db->exec('ROLLBACK');
+                throw $error;
             } finally {
                 $db->busyTimeout(5000);
             }
+            return true;
         } catch (\Throwable $error) {
-            $this->grav['log']->warning('[botWarden] Visit delivery diagnostics could not be saved');
+            if ($error instanceof \SQLite3Exception && in_array($error->getCode() & 0xff, [5, 6], true)) {
+                $this->grav['log']->debug('[botWarden] Visit delivery diagnostics skipped while database is busy');
+            } else {
+                $this->grav['log']->warning('[botWarden] Visit delivery diagnostics could not be saved ('
+                    . get_class($error) . ', code ' . $error->getCode() . ')');
+            }
+            return false;
         }
     }
 
