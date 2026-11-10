@@ -688,7 +688,17 @@ final class ApiAuthorizationTest extends TestCase
             $shell = self::request('GET', $adminPath . '/login', null, $headers);
             $this->assertSame(200, $shell['status']);
             $this->assertSame(1, preg_match('~window\.__GRAV_CONFIG__ = (.*?);</script>~s', $shell['body'], $boot));
-            $boot = json_decode($boot[1], true, 512, JSON_THROW_ON_ERROR);
+            try {
+                $boot = json_decode($boot[1], true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException $error) {
+                // Describe the capture without exposing configuration values in CI logs.
+                preg_match('~^\s*(\{|\[|JSON\.parse|Object\.assign|Object\.freeze)~', $boot[1], $expression);
+                $this->fail(sprintf(
+                    'Admin2 boot configuration at %s/login is not JSON: %s; bytes=%d; expression=%s; script tags=%d',
+                    $adminPath, $error->getMessage(), strlen($boot[1]), $expression[1] ?? 'unrecognized',
+                    preg_match_all('~</?script\b~i', $boot[1])
+                ));
+            }
             $mount = parse_url(self::$base, PHP_URL_PATH) ?: '';
             $this->assertSame($mount, $boot['serverUrl']);
             $this->assertSame($mount . $adminPath, $boot['basePath']);
