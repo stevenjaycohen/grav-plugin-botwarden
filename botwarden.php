@@ -479,13 +479,13 @@ class BotwardenPlugin extends Plugin
         if ((!empty($config['sources']['dark_visitors']) || !empty($config['robots_txt']['enabled'])) && !empty($config['dark_visitors']['api_key'])) {
             $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskUpdateDarkVisitors', [], 'botwarden-dark-visitors');
             $job->backlink('plugins/botwarden');
-            $job->at('*/5 * * * *');
+            $job->at('*/15 * * * *');
         }
 
         if (!empty($config['enable_reporting']) && !empty($config['abuseipdb']['api_key'])) {
             $job = $scheduler->addFunction('Grav\Plugin\BotwardenPlugin::taskFlushReports', [], 'botwarden-flush-reports');
             $job->backlink('plugins/botwarden');
-            $job->at('*/10 * * * *');
+            $job->at('*/30 * * * *');
         }
     }
 

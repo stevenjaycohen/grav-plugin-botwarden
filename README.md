@@ -132,9 +132,9 @@ Configure Grav's scheduler to run regularly through your hosting environment. En
 | --- | --- | --- |
 | Local blacklist trimming and database vacuum | Daily at 02:35 | `auto_clean` |
 | AbuseIPDB bulk refresh | Daily at 02:45 | `auto_cache`, AbuseIPDB bulk source and API key |
-| Known Agents crawler refresh / robots.txt publication | Every five minutes; downloads only when the configured TTL has elapsed | Known Agents source or robots.txt publication, plus project token |
+| Known Agents crawler refresh / robots.txt publication | Every 15 minutes; downloads only when the configured TTL has elapsed | Known Agents source or robots.txt publication, plus project token |
 | Expired cache/local entries and block history cleanup | Daily at 03:30 | Always registered while botWarden is enabled, after any required migration |
-| Queued AbuseIPDB reports | Every 10 minutes | `enable_reporting` and AbuseIPDB API key |
+| Queued AbuseIPDB reports | Every 30 minutes | `enable_reporting` and AbuseIPDB API key |
 
 After enabling a list source, run its job from Grav's scheduler or wait for its scheduled refresh, then check the dashboard counts and scheduler results.
 
