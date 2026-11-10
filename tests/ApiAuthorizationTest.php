@@ -687,7 +687,9 @@ final class ApiAuthorizationTest extends TestCase
             }
             $shell = self::request('GET', $adminPath . '/login', null, $headers);
             $this->assertSame(200, $shell['status']);
-            $this->assertSame(1, preg_match('~window\.__GRAV_CONFIG__ = (.*?);</script>~s', $shell['body'], $boot));
+            // Admin2 also assigns its CSP nonce in this script; capture only the
+            // configuration object, allowing nested objects and quoted braces.
+            $this->assertSame(1, preg_match('~window\.__GRAV_CONFIG__\s*=\s*(\{(?:"(?:[^"\\\\]|\\\\.)*"|[^"{}]|(?1))*\})\s*;~s', $shell['body'], $boot));
             try {
                 $boot = json_decode($boot[1], true, 512, JSON_THROW_ON_ERROR);
             } catch (\JsonException $error) {
