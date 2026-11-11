@@ -1,6 +1,6 @@
 # botWarden — security and crawler policy management for Grav 2
 
-**Version 1.2.7** — maintained continuation of GRVHulk 1.1 for Grav 2.
+**Version 1.2.8** — maintained continuation of GRVHulk 1.1 for Grav 2.
 
 botWarden helps you block unwanted IP addresses, filter abusive requests and manage crawler access on your Grav site. Manage local blocks from Admin2 and optionally connect AbuseIPDB, CrowdSec or Known Agents.
 
@@ -120,7 +120,7 @@ dark_visitors:
   report_visits: true
 ```
 
-Automatic visit reporting sends public-site request metadata to Known Agents after Grav emits the response. It excludes the configured Admin2 and versioned API routes, including login and API authentication requests, using the same path-prefix check as the blocker. Reports have a three-second timeout; failures are logged without replacing the page response and are not queued for retry. When a failure can be recorded in the existing botWarden database, new reports pause for five minutes before delivery resumes. Visits during that pause are not queued. The dashboard shows accepted/failed attempts and the last attempt when a botWarden database already exists. These counters are saved atomically with a bounded 100 ms wait for database contention; a longer lock skips diagnostics at debug level, while unexpected failures retain a warning with the exception type and code. HTTP acceptance does not establish a connected provider project. PHP-FPM/browser response timing and worker occupancy must be measured on the intended hosting environment.
+Automatic visit reporting sends public-site request metadata to Known Agents after Grav emits the response. It excludes the configured Admin2 and versioned API routes, including login and API authentication requests, using the same path-prefix check as the blocker. Reports have a three-second timeout; failures are logged without replacing the page response and are not queued for retry. When a failure can be recorded in the existing botWarden database, new reports pause for five minutes before delivery resumes. Requests already reporting when the first failure arrives share that pause and produce only one failure warning per pause window. Their outcomes still count in diagnostics, and a late success does not cancel the active pause. Visits during that pause are not queued. The dashboard shows accepted/failed attempts and the last attempt when a botWarden database already exists. These counters are saved atomically with a bounded 100 ms wait for database contention; a longer lock skips diagnostics at debug level, while unexpected failures retain a warning with the exception type and code. HTTP acceptance does not establish a connected provider project. PHP-FPM/browser response timing and worker occupancy must be measured on the intended hosting environment.
 
 Events include the path without its query string, HTTP method, selected headers (including User-Agent and client-IP information), response status, available content type and elapsed time. Authorization headers, cookies, API keys, request bodies and response bodies are excluded. Referer URLs have credentials, query strings and fragments removed.
 

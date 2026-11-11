@@ -44,9 +44,92 @@ final class VisitReportingTest extends TestCase
         rmdir($this->directory);
     }
 
-    private function record(bool $accepted): void
+    private function record(bool $accepted): ?bool
     {
-        (new \ReflectionMethod(BotwardenPlugin::class, 'recordVisitOutcome'))->invoke($this->plugin, $accepted);
+        return (new \ReflectionMethod(BotwardenPlugin::class, 'recordVisitOutcome'))->invoke($this->plugin, $accepted);
+    }
+
+    public function testInFlightFailuresShareOnePauseAndWarning(): void
+    {
+        $this->assertTrue($this->record(false));
+        $retryAfter = BotwardenDatabase::getMeta($this->db, 'visits_retry_after');
+        $this->assertGreaterThan(time(), (int)$retryAfter);
+        // An earlier in-flight request can finish after the first failure.
+        for ($i = 0; $i < 8; ++$i) { $this->assertFalse($this->record(false)); }
+        $this->assertSame('9', BotwardenDatabase::getMeta($this->db, 'visits_failed'));
+        $this->assertSame($retryAfter, BotwardenDatabase::getMeta($this->db, 'visits_retry_after'));
+    }
+
+    public function testLateSuccessDoesNotCancelAnActiveFailurePause(): void
+    {
+        $this->assertTrue($this->record(false));
+        $retryAfter = BotwardenDatabase::getMeta($this->db, 'visits_retry_after');
+        $this->assertFalse($this->record(true));
+        $this->assertSame('1', BotwardenDatabase::getMeta($this->db, 'visits_accepted'));
+        $this->assertSame($retryAfter, BotwardenDatabase::getMeta($this->db, 'visits_retry_after'));
+        $this->assertTrue((new \ReflectionMethod(BotwardenPlugin::class, 'visitReportingDeferred'))->invoke($this->plugin));
+        $this->assertFalse($this->record(false));
+    }
+
+    public function testExpiredPauseAllowsRecoveryOrANewFailureWarning(): void
+    {
+        BotwardenDatabase::setMeta($this->db, 'visits_retry_after', (string)(time() - 1));
+        $this->assertFalse($this->record(true));
+        $this->assertSame('0', BotwardenDatabase::getMeta($this->db, 'visits_retry_after'));
+        $this->assertTrue($this->record(false));
+        BotwardenDatabase::setMeta($this->db, 'visits_retry_after', (string)(time() - 1));
+        $this->assertTrue($this->record(false));
+        $this->assertSame('2', BotwardenDatabase::getMeta($this->db, 'visits_failed'));
+    }
+
+    public function testConcurrentFailuresOnlyOneWorkerStartsThePause(): void
+    {
+        $code = <<<'PHP'
+require $argv[1];
+$plugin = new class($argv[2]) extends \Grav\Plugin\BotwardenPlugin {
+    protected $grav;
+    public function __construct(string $directory) {
+        $this->grav = ['locator' => new class($directory) {
+            public function __construct(private string $directory) {}
+            public function findResource(string $resource, bool $absolute): string { return $this->directory; }
+        }, 'log' => new class {
+            public function warning(string $message): void {}
+            public function debug(string $message): void {}
+        }];
+    }
+};
+$deferred = (new \ReflectionMethod(\Grav\Plugin\BotwardenPlugin::class, 'visitReportingDeferred'))->invoke($plugin);
+fwrite(STDOUT, $deferred ? "paused\n" : "ready\n"); fflush(STDOUT);
+fgets(STDIN);
+$started = (new \ReflectionMethod(\Grav\Plugin\BotwardenPlugin::class, 'recordVisitOutcome'))->invoke($plugin, false);
+echo json_encode($started), "\n";
+PHP;
+        $workers = [];
+        try {
+            for ($i = 0; $i < 8; ++$i) {
+                $process = proc_open([PHP_BINARY, '-r', $code, __DIR__ . '/bootstrap.php', $this->directory],
+                    [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+                $this->assertIsResource($process);
+                $workers[] = [$process, $pipes];
+            }
+            foreach ($workers as [$process, $pipes]) { $this->assertSame("ready\n", fgets($pipes[1])); }
+            foreach ($workers as [$process, $pipes]) { fwrite($pipes[0], "finish\n"); fflush($pipes[0]); }
+            $claims = [];
+            foreach ($workers as [$process, $pipes]) {
+                $claims[] = json_decode(stream_get_contents($pipes[1]), true, 512, JSON_THROW_ON_ERROR);
+            }
+            $this->assertSame(1, count(array_filter($claims, static fn ($claim) => $claim === true)));
+            $this->assertSame(7, count(array_filter($claims, static fn ($claim) => $claim === false)));
+            $this->assertSame('8', BotwardenDatabase::getMeta($this->db, 'visits_failed'));
+        } finally {
+            foreach ($workers as [$process, $pipes]) {
+                fclose($pipes[0]);
+                fclose($pipes[1]);
+                $error = stream_get_contents($pipes[2]);
+                fclose($pipes[2]);
+                $this->assertSame(0, proc_close($process), $error);
+            }
+        }
     }
 
     public function testDiagnosticsRecoverFromBriefWriterContention(): void

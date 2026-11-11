@@ -1,3 +1,10 @@
+# 1.2.8
+## 2026-11-11
+
+1. [](#bugfix)
+    * Coordinate concurrent Known Agents visit-report failures so only the first failure starts and logs each five-minute pause. Continue counting every completed delivery attempt without extending the active pause.
+    * Preserve an active reporting pause when an earlier in-flight request succeeds; a late success no longer restarts reporting during an outage.
+
 # 1.2.7
 ## 2026-11-10
 

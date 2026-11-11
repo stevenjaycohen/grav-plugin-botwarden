@@ -85,10 +85,11 @@ class BotwardenPlugin extends Plugin
             (new DarkVisitorsClient(trim((string)$config['dark_visitors']['api_key'])))->reportVisit($visit);
             $this->recordVisitOutcome(true);
         } catch (\Throwable $error) {
-            $saved = $this->recordVisitOutcome(false);
+            $pauseStarted = $this->recordVisitOutcome(false);
+            if ($pauseStarted === false) return;
             // Reporting failures must never change the visitor's response.
             $this->grav['log']->warning('[botWarden] Known Agents visit reporting failed: ' . $error->getMessage()
-                . ($saved ? '; new visit reports paused for five minutes' : ''));
+                . ($pauseStarted === true ? '; new visit reports paused for five minutes' : ''));
         }
     }
 
@@ -104,21 +105,28 @@ class BotwardenPlugin extends Plugin
         }
     }
 
-    private function recordVisitOutcome(bool $accepted): bool
+    /** Whether this outcome started a pause; null means diagnostics were not saved. */
+    private function recordVisitOutcome(bool $accepted): ?bool
     {
         try {
             $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
             // Diagnostics must not create a destination that prevents a legacy import.
-            if (!is_file($dataDir . '/botwarden.sqlite')) return false;
+            if (!is_file($dataDir . '/botwarden.sqlite')) return null;
             $db = BotwardenDatabase::getInstance($dataDir);
             $db->busyTimeout(100);
             $transaction = false;
             try {
                 $db->exec('BEGIN IMMEDIATE');
                 $transaction = true;
+                $now = time();
+                $pauseActive = (int)BotwardenDatabase::getMeta($db, 'visits_retry_after') > $now;
+                $pauseStarted = !$accepted && !$pauseActive;
                 BotwardenDatabase::incrementMeta($db, $accepted ? 'visits_accepted' : 'visits_failed');
-                BotwardenDatabase::setMeta($db, 'visits_last_attempt', (string)time());
-                BotwardenDatabase::setMeta($db, 'visits_retry_after', $accepted ? '0' : (string)(time() + 300));
+                BotwardenDatabase::setMeta($db, 'visits_last_attempt', (string)$now);
+                // In-flight failures share one pause; a late success cannot cancel it.
+                if (!$pauseActive) {
+                    BotwardenDatabase::setMeta($db, 'visits_retry_after', $accepted ? '0' : (string)($now + 300));
+                }
                 $db->exec('COMMIT');
                 $transaction = false;
             } catch (\Throwable $error) {
@@ -127,7 +135,7 @@ class BotwardenPlugin extends Plugin
             } finally {
                 $db->busyTimeout(5000);
             }
-            return true;
+            return $pauseStarted;
         } catch (\Throwable $error) {
             if ($error instanceof \SQLite3Exception && in_array($error->getCode() & 0xff, [5, 6], true)) {
                 $this->grav['log']->debug('[botWarden] Visit delivery diagnostics skipped while database is busy');
@@ -135,7 +143,7 @@ class BotwardenPlugin extends Plugin
                 $this->grav['log']->warning('[botWarden] Visit delivery diagnostics could not be saved ('
                     . get_class($error) . ', code ' . $error->getCode() . ')');
             }
-            return false;
+            return null;
         }
     }
 
