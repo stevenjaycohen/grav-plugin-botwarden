@@ -13,6 +13,7 @@ use Grav\Plugin\Botwarden\DarkVisitorsClient;
 use Grav\Plugin\Botwarden\BotwardenDatabase;
 use Grav\Plugin\Botwarden\IpDetector;
 use Grav\Plugin\Botwarden\LegacyGuard;
+use Grav\Plugin\Botwarden\VisitReportQueue;
 use RocketTheme\Toolbox\Event\Event;
 use SQLite3;
 
@@ -78,72 +79,21 @@ class BotwardenPlugin extends Plugin
             if ($this->isAdmin() || $this->isManagementPath($this->grav['uri']->route())) {
                 return;
             }
-            if ($this->visitReportingDeferred()) return;
+            $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
+            // Do not create a database that would prevent a pending legacy migration.
+            if (!is_file($dataDir . '/botwarden.sqlite')) return;
             $started = (float)($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
             $visit = DarkVisitorsClient::visit($_SERVER, headers_list(), http_response_code() ?: 200,
                 (microtime(true) - $started) * 1000);
-            (new DarkVisitorsClient(trim((string)$config['dark_visitors']['api_key'])))->reportVisit($visit);
-            $this->recordVisitOutcome(true);
+            (new VisitReportQueue(BotwardenDatabase::getInstance($dataDir)))->enqueue($visit);
         } catch (\Throwable $error) {
-            $pauseStarted = $this->recordVisitOutcome(false);
-            if ($pauseStarted === false) return;
-            // Reporting failures must never change the visitor's response.
-            $this->grav['log']->warning('[botWarden] Known Agents visit reporting failed: ' . $error->getMessage()
-                . ($pauseStarted === true ? '; new visit reports paused for five minutes' : ''));
-        }
-    }
-
-    private function visitReportingDeferred(): bool
-    {
-        try {
-            $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
-            if (!is_file($dataDir . '/botwarden.sqlite')) return false;
-            return (int)BotwardenDatabase::getMeta(BotwardenDatabase::getInstance($dataDir), 'visits_retry_after') > time();
-        } catch (\Throwable $error) {
-            // Unavailable diagnostics must not prevent best-effort visit delivery.
-            return false;
-        }
-    }
-
-    /** Whether this outcome started a pause; null means diagnostics were not saved. */
-    private function recordVisitOutcome(bool $accepted): ?bool
-    {
-        try {
-            $dataDir = $this->grav['locator']->findResource('user://data', true) . '/botwarden';
-            // Diagnostics must not create a destination that prevents a legacy import.
-            if (!is_file($dataDir . '/botwarden.sqlite')) return null;
-            $db = BotwardenDatabase::getInstance($dataDir);
-            $db->busyTimeout(100);
-            $transaction = false;
-            try {
-                $db->exec('BEGIN IMMEDIATE');
-                $transaction = true;
-                $now = time();
-                $pauseActive = (int)BotwardenDatabase::getMeta($db, 'visits_retry_after') > $now;
-                $pauseStarted = !$accepted && !$pauseActive;
-                BotwardenDatabase::incrementMeta($db, $accepted ? 'visits_accepted' : 'visits_failed');
-                BotwardenDatabase::setMeta($db, 'visits_last_attempt', (string)$now);
-                // In-flight failures share one pause; a late success cannot cancel it.
-                if (!$pauseActive) {
-                    BotwardenDatabase::setMeta($db, 'visits_retry_after', $accepted ? '0' : (string)($now + 300));
-                }
-                $db->exec('COMMIT');
-                $transaction = false;
-            } catch (\Throwable $error) {
-                if ($transaction) $db->exec('ROLLBACK');
-                throw $error;
-            } finally {
-                $db->busyTimeout(5000);
-            }
-            return $pauseStarted;
-        } catch (\Throwable $error) {
+            // Capturing a visit must never change the visitor's response or make a network request.
             if ($error instanceof \SQLite3Exception && in_array($error->getCode() & 0xff, [5, 6], true)) {
-                $this->grav['log']->debug('[botWarden] Visit delivery diagnostics skipped while database is busy');
+                $this->grav['log']->debug('[botWarden] Visit queue capture skipped while database is busy');
             } else {
-                $this->grav['log']->warning('[botWarden] Visit delivery diagnostics could not be saved ('
+                $this->grav['log']->warning('[botWarden] Visit could not be queued ('
                     . get_class($error) . ', code ' . $error->getCode() . ')');
             }
-            return null;
         }
     }
 
@@ -525,6 +475,11 @@ class BotwardenPlugin extends Plugin
             $job->backlink('plugins/botwarden');
             $job->at('*/30 * * * *');
         }
+        if (!empty($config['dark_visitors']['report_visits']) && !empty($config['dark_visitors']['api_key'])) {
+            $job = $scheduler->addFunction('Grav\\Plugin\\BotwardenPlugin::taskFlushVisits', [], 'botwarden-flush-visits');
+            $job->backlink('plugins/botwarden');
+            $job->at('* * * * *');
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -573,6 +528,7 @@ class BotwardenPlugin extends Plugin
         $historyMax = (int)($config['history_max_rows'] ?? 50000);
         $pruned     = BotwardenDatabase::pruneHistory($db, $historyTtl, $historyMax);
         BotwardenDatabase::expireReports($db);
+        (new VisitReportQueue($db))->expire();
 
         echo "Warden: pruned {$pruned} history rows (ttl:{$historyTtl}s, max:{$historyMax}), {$expired} expired local entries (ttl:{$localTtl}s) and expired cache entries.\n";
     }
@@ -706,6 +662,24 @@ class BotwardenPlugin extends Plugin
         if ($failed > 0) {
             throw new \RuntimeException("AbuseIPDB report flush failed for {$failed} report(s)");
         }
+    }
+
+    public static function taskFlushVisits(): void
+    {
+        $grav = Grav::instance();
+        $config = $grav['config']->get('plugins.botwarden');
+        if (empty($config['dark_visitors']['report_visits']) || empty($config['dark_visitors']['api_key'])
+            || LegacyGuard::mustDefer($grav['locator']->findResource('user://', true))) {
+            echo "Warden: Known Agents visit delivery disabled or awaiting migration.\n";
+            return;
+        }
+        $dataDir = $grav['locator']->findResource('user://data', true) . '/botwarden';
+        $client = new DarkVisitorsClient(trim((string)$config['dark_visitors']['api_key']));
+        $result = (new VisitReportQueue(BotwardenDatabase::getInstance($dataDir)))->flush(
+            $client->reportVisits(...), fn (): array => $client->lastVisitDiagnostics);
+        foreach ($result['events'] as $event) $grav['log']->{$event['level']}($event['message']);
+        echo 'Warden: Known Agents visits ' . $result['state'] . '; accepted ' . $result['accepted']
+            . ', pending ' . $result['pending'] . ', expired ' . $result['expired'] . ".\n";
     }
 
     private static function diagnosticPath(string $uri): string

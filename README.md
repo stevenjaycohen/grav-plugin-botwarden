@@ -1,6 +1,6 @@
 # botWarden — security and crawler policy management for Grav 2
 
-**Version 1.2.8** — maintained continuation of GRVHulk 1.1 for Grav 2.
+**Version 1.3.0** — maintained continuation of GRVHulk 1.1 for Grav 2.
 
 botWarden helps you block unwanted IP addresses, filter abusive requests and manage crawler access on your Grav site. Manage local blocks from Admin2 and optionally connect AbuseIPDB, CrowdSec or Known Agents.
 
@@ -120,7 +120,15 @@ dark_visitors:
   report_visits: true
 ```
 
-Automatic visit reporting sends public-site request metadata to Known Agents after Grav emits the response. It excludes the configured Admin2 and versioned API routes, including login and API authentication requests, using the same path-prefix check as the blocker. Reports have a three-second timeout; failures are logged without replacing the page response and are not queued for retry. When a failure can be recorded in the existing botWarden database, new reports pause for five minutes before delivery resumes. Requests already reporting when the first failure arrives share that pause and produce only one failure warning per pause window. Their outcomes still count in diagnostics, and a late success does not cancel the active pause. Visits during that pause are not queued. The dashboard shows accepted/failed attempts and the last attempt when a botWarden database already exists. These counters are saved atomically with a bounded 100 ms wait for database contention; a longer lock skips diagnostics at debug level, while unexpected failures retain a warning with the exception type and code. HTTP acceptance does not establish a connected provider project. PHP-FPM/browser response timing and worker occupancy must be measured on the intended hosting environment.
+Automatic visit reporting captures public-site request metadata after Grav emits the response, without making an outbound request from the visitor's PHP worker. Configured Admin2 and versioned API routes remain excluded. Visits are held in the existing botWarden SQLite database and delivered by `botwarden-flush-visits`, registered every minute when reporting and its token are enabled. A working Grav scheduler trigger is required. Disabling reporting stops delivery as well as new capture.
+
+The queue holds at most 10,000 visits, each at most 8 KiB of JSON (about 78 MiB of queued payload, excluding SQLite/index/WAL overhead). Oversized, invalid, or full-queue captures are rejected and counted. Queued visits expire after 24 hours and are removed before delivery and during maintenance; cleanup requires requests or scheduled jobs to run. Enqueue waits at most 100 ms for writer contention; a longer lock skips capture at debug level. Storage/migration uses the existing schema-version mechanism and preserves previous data. The queue is not created by a shutdown hook when the database is absent, preserving legacy migration safeguards.
+
+Each flush has a 20-second work budget, attempts at most 200 visits in batches of at most 25, and retains the existing three-second per-request timeout. A recoverable, fenced database lease prevents simultaneous workers from delivering the same queue. Only a 204 response acknowledges and removes a batch. Failures retain visits, stop the flush, and back off for 5, 10, 20, 40, then 60 minutes; a longer provider Retry-After is honored up to the 24-hour retention window. Capture continues during backoff. Delivery is at least once: a timeout or crash after provider acceptance but before acknowledgement can cause duplicate analytics events on retry. TTL and capacity limits mean this is not a lossless audit log.
+
+The first failed batch logs a warning, continuing failures produce at most one summary per hour, and successful delivery logs one recovery notice. Retryable provider failures are represented as degraded delivery on the dashboard, rather than repeated scheduler exceptions. The dashboard shows pending, accepted, failed, expired, rejected, retry time, last success, and the last safe diagnostic snapshot. Diagnostics contain HTTP/cURL codes, DNS/connect/TLS/first-byte/total timings, and only allowlisted `server`, `via`, `cf-ray`, `x-request-id`, and `retry-after` response headers. They omit request headers and response bodies and redact the configured project token. Counters and acknowledgements are committed atomically. HTTP acceptance does not establish a connected provider project.
+
+The request format and 204 acknowledgement match the [Known Agents REST API](https://knownagents.com/docs/analytics/rest-api), which recommends background tasks or a queue. No live provider call is needed for local validation.
 
 Events include the path without its query string, HTTP method, selected headers (including User-Agent and client-IP information), response status, available content type and elapsed time. Authorization headers, cookies, API keys, request bodies and response bodies are excluded. Referer URLs have credentials, query strings and fragments removed.
 
@@ -135,6 +143,7 @@ Configure Grav's scheduler to run regularly through your hosting environment. En
 | Known Agents crawler refresh / robots.txt publication | Every 15 minutes; downloads only when the configured TTL has elapsed | Known Agents source or robots.txt publication, plus project token |
 | Expired cache/local entries and block history cleanup | Daily at 03:30 | Always registered while botWarden is enabled, after any required migration |
 | Queued AbuseIPDB reports | Every 30 minutes | `enable_reporting` and AbuseIPDB API key |
+| Queued Known Agents visits | Every minute; delivery observes failure backoff | `dark_visitors.report_visits` and project token |
 
 After enabling a list source, run its job from Grav's scheduler or wait for its scheduled refresh, then check the dashboard counts and scheduler results.
 

@@ -73,6 +73,7 @@ if ($operation === 'setup') {
         $sessionPath = $grav['config']->get('system.session.options.save_path');
         if (realpath($sessionPath) !== realpath(dirname($work) . '/sessions')) throw new RuntimeException('Session storage must remain in the fixture');
         $sessionName = 'grav-site-' . substr(md5(GRAV_ROOT), 0, 7);
+        $fixtureSession = $grav['session'];
         foreach (['valid' => true, 'pending_two_factor' => false, 'logout' => true, 'management' => true] as $label => $authorized) {
             $sessionUser = clone $user;
             $sessionUser->set('authenticated', true);
@@ -81,7 +82,9 @@ if ($operation === 'setup') {
             $id = bin2hex(random_bytes(20));
             session_id($id);
             if (!session_start(['save_path' => $sessionPath, 'use_cookies' => false, 'use_strict_mode' => false, 'cache_limiter' => ''])) throw new RuntimeException('Could not create native PHP session fixture');
-            $_SESSION = ['user' => $sessionUser];
+            // CLI startup uses native PHP, but Grav initializes the contents and site binding.
+            $fixtureSession->clear();
+            $fixtureSession->user = $sessionUser;
             session_write_close();
             $sessions[] = $sessionPath . '/sess_' . $id;
             $credentials['sessions'][$label] = $sessionName . '=' . $id;

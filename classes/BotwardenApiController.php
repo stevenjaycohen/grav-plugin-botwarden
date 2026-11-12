@@ -171,9 +171,17 @@ final class BotwardenApiController extends AbstractApiController
             : (empty($config['crowdsec'][($config['crowdsec']['mode'] ?? 'cti') . '_api_key']) ? 'missing credentials' : 'configured; decisions checked on request')];
         $diagnostics = [];
         foreach (['reports_sent', 'reports_failed', 'reports_dropped', 'reports_expired', 'reports_not_queued', 'reports_retry_after',
-            'visits_accepted', 'visits_failed', 'visits_last_attempt'] as $key) {
+            'visits_accepted', 'visits_failed', 'visits_last_attempt', 'visits_queued', 'visits_dropped', 'visits_expired',
+            'visits_retry_after', 'visits_failure_streak', 'visits_last_success'] as $key) {
             $diagnostics[$key] = $db ? (int)BotwardenDatabase::getMeta($db, $key) : 0;
         }
+        $visits = $db ? new VisitReportQueue($db) : null;
+        $diagnostics['visits_pending'] = $visits ? $visits->pending() : 0;
+        $visitState = empty($config['dark_visitors']['report_visits']) ? 'disabled'
+            : (empty($config['dark_visitors']['api_key']) ? 'missing credentials'
+                : ($diagnostics['visits_failure_streak'] ? 'degraded; last delivery attempt failed'
+                    : ($diagnostics['visits_pending'] ? 'queued for scheduled delivery'
+                        : ($diagnostics['visits_last_success'] ? 'healthy' : 'waiting for visits'))));
         $errors = [];
         foreach (['whitelist', 'trusted_proxies'] as $field) {
             $entries = $config[$field] ?? [];
@@ -197,7 +205,9 @@ final class BotwardenApiController extends AbstractApiController
             }
         }
         return ['integrations' => $integrations, 'delivery' => $diagnostics, 'configuration_errors' => $errors,
-            'visit_reporting' => !empty($config['dark_visitors']['report_visits']) ? 'best effort; no queue or retry; acceptance does not establish project connection' : 'disabled'];
+            'visit_reporting' => $visitState,
+            'visit_diagnostics' => $visits ? $visits->diagnostics() : [],
+            'visit_error' => $db ? BotwardenDatabase::getMeta($db, 'visits_last_error') : null];
     }
 
     public function refreshIntegration(ServerRequestInterface $request): ResponseInterface

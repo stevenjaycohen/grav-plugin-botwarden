@@ -93,10 +93,16 @@
           Object.entries(stats.delivery || {}).map(([key, value]) => {
             const labels = {reports_sent:'Reports sent', reports_failed:'Report failures', reports_dropped:'Reports dropped',
               reports_expired:'Reports expired', reports_not_queued:'Reports deduplicated or rejected', reports_retry_after:'Reports resume',
-              visits_accepted:'Visits accepted by API', visits_failed:'Visit failures', visits_last_attempt:'Last visit attempt'};
-            const timestamp = key === 'reports_retry_after' || key === 'visits_last_attempt';
+              visits_accepted:'Visits accepted by API', visits_failed:'Failed visit delivery attempts', visits_last_attempt:'Last visit attempt',
+              visits_pending:'Visits queued', visits_queued:'Visits captured', visits_dropped:'Visits rejected', visits_expired:'Visits expired',
+              visits_retry_after:'Visits resume', visits_failure_streak:'Consecutive failed batches', visits_last_success:'Last visit success'};
+            const timestamp = ['reports_retry_after','visits_last_attempt','visits_retry_after','visits_last_success'].includes(key);
             return (labels[key] || key) + ': ' + (timestamp ? (value ? new Date(value * 1000).toLocaleString() : '—') : value);
           }).join('; ');
+        if (stats.visit_error) this.shadowRoot.getElementById('delivery').textContent += '; last error: ' + stats.visit_error;
+        if (Object.keys(stats.visit_diagnostics || {}).length) {
+          this.shadowRoot.getElementById('delivery').textContent += '; delivery diagnostics: ' + JSON.stringify(stats.visit_diagnostics);
+        }
         if ((stats.configuration_errors || []).length) this.message(stats.configuration_errors.join(' '), true);
         this.offset = blocks.offset ?? this.offset ?? 0;
         this.historyOffset = history.offset ?? this.historyOffset ?? 0;

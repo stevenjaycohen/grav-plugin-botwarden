@@ -88,7 +88,7 @@ final class ServiceIntegrationTest extends TestCase
         $this->db = new SQLite3(self::$data . '/botwarden.sqlite');
         $this->db->enableExceptions(true);
         $this->db->busyTimeout(5000);
-        foreach (['local', 'history', 'abuseipdb_bulk', 'dark_visitors_agents', 'report_queue', 'ip_cache', 'metadata'] as $table) {
+        foreach (['local', 'history', 'abuseipdb_bulk', 'dark_visitors_agents', 'report_queue', 'ip_cache', 'metadata', 'visit_queue'] as $table) {
             $this->db->exec('DELETE FROM ' . $table);
         }
         file_put_contents(self::$work . '/requests.jsonl', '');
@@ -223,7 +223,17 @@ final class ServiceIntegrationTest extends TestCase
     {
         $deadline = microtime(true) + 4;
         do {
-            $requests = array_values(array_filter($this->requests(), static fn($request) => $request['service'] === 'visits'));
+            // Capture finishes in shutdown; then deliver through the actual registered scheduler job.
+            if ((int)$this->db->querySingle('SELECT COUNT(*) FROM visit_queue') > 0) {
+                $this->assertTrue($this->job('botwarden-flush-visits', 'valid', ['dark_visitors' => ['report_visits' => true]])['success']);
+            }
+            $requests = [];
+            foreach ($this->requests() as $request) {
+                if ($request['service'] !== 'visits') continue;
+                foreach (json_decode($request['body'], true, 512, JSON_THROW_ON_ERROR) as $visit) {
+                    $event = $request; $event['body'] = json_encode([$visit], JSON_THROW_ON_ERROR); $requests[] = $event;
+                }
+            }
             if (count($requests) >= $count) return $requests;
             usleep(10000);
         } while (microtime(true) < $deadline);
@@ -276,6 +286,17 @@ final class ServiceIntegrationTest extends TestCase
         yield ['malformed', 200];
     }
 
+    public function testKnownAgentsDiagnosticsRedactReflectedTokensAndExcludeCookies(): void
+    {
+        $result = self::helper(['operation' => 'visit-diagnostics', 'scenario' => 'reflected']);
+        $this->assertSame(204, $result['diagnostics']['status']);
+        $this->assertSame('[redacted]', $result['diagnostics']['headers']['x-request-id']);
+        $this->assertStringNotContainsString('synthetic-fixture-key', json_encode($result));
+        $this->assertStringNotContainsString('SECRET', json_encode($result));
+        $this->assertArrayNotHasKey('body', $result['diagnostics']);
+        $this->assertArrayHasKey('connect_ms', $result['diagnostics']);
+    }
+
     #[DataProvider('visitFailures')]
     public function testKnownAgentsRejectsVisitResponsesOtherThan204(string $scenario, int $status): void
     {
@@ -303,7 +324,7 @@ final class ServiceIntegrationTest extends TestCase
         $requests = $this->waitForVisits(1);
         $this->assertCount(1, $requests);
         $visit = json_decode($requests[0]['body'], true, 512, JSON_THROW_ON_ERROR)[0];
-        $this->assertSame('/', $visit['request_path']);
+        $this->assertSame((parse_url(self::$base, PHP_URL_PATH) ?: '') . '/', $visit['request_path']);
         $this->assertSame('FixtureBrowser', $visit['request_headers']['user-agent']);
         $this->assertSame('198.51.100.8', $visit['request_headers']['x-forwarded-for']);
         $this->assertSame(200, $visit['response_status_code']);
@@ -325,7 +346,7 @@ final class ServiceIntegrationTest extends TestCase
         $requests = $this->waitForVisits(1);
         $this->assertCount(1, $requests);
         $visit = json_decode($requests[0]['body'], true, 512, JSON_THROW_ON_ERROR)[0];
-        $this->assertSame('/', $visit['request_path']);
+        $this->assertSame((parse_url(self::$base, PHP_URL_PATH) ?: '') . '/', $visit['request_path']);
         $this->assertSame('POST', $visit['request_method']);
         $this->assertSame($response['status'], $visit['response_status_code']);
         $this->assertSame('2025-06-18', $visit['request_headers']['mcp-protocol-version']);
@@ -433,34 +454,45 @@ final class ServiceIntegrationTest extends TestCase
     public function testKnownAgentsReportingFailureLeavesThePageResponseUnchanged(): void
     {
         $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
-        $response = self::http('/', '198.51.100.8', 'FixtureBrowser', ['X-Botwarden-Visit-Scenario: server_error']);
+        $response = self::http('/', '198.51.100.8', 'FixtureBrowser');
         $this->assertSame(200, $response['status']);
         $this->assertStringContainsString('Synthetic botWarden migration test site.', $response['body']);
-        $this->assertStringNotContainsString('HTTP 503', $response['body']);
-        $this->assertCount(1, $this->waitForVisits(1));
+        // A management request waits for public shutdown without capturing another visit.
+        $this->assertSame(200, self::http('/api/v1/ping')['status']);
+        $this->assertSame([], $this->requests(), 'Page requests must not contact the visit API');
+        $this->assertSame(1, (int)$this->db->querySingle('SELECT COUNT(*) FROM visit_queue'));
+        $job = $this->job('botwarden-flush-visits', 'bad_gateway', ['dark_visitors' => ['report_visits' => true]]);
+        $this->assertTrue($job['success'], 'A retained provider failure must not produce repeated scheduler errors');
+        $this->assertSame(1, (int)$this->db->querySingle('SELECT COUNT(*) FROM visit_queue'));
+        $detail = json_decode(\Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_last_diagnostics'), true);
+        $this->assertSame(502, $detail['status']);
+        $this->assertSame('fixture-response-id', $detail['headers']['x-request-id']);
+        $this->assertArrayNotHasKey('set-cookie', $detail['headers']);
+        $this->assertArrayHasKey('total_ms', $detail);
     }
 
-    public function testKnownAgentsTimeoutPausesNewReportsAndRecoversAfterCooldown(): void
+    public function testKnownAgentsTimeoutRetainsNewVisitsAndRecoversAfterBackoff(): void
     {
         $this->configure(['dark_visitors' => ['api_key' => 'synthetic-fixture-key', 'report_visits' => true]]);
-        $response = self::http('/', '198.51.100.8', 'FixtureBrowser', ['X-Botwarden-Visit-Scenario: timeout']);
-        $this->assertSame(200, $response['status']);
-        $this->assertStringContainsString('Synthetic botWarden migration test site.', $response['body']);
-        // The next request waits for the preceding shutdown hook to finish.
         $this->assertSame(200, self::http('/')['status']);
         $this->assertSame(200, self::http('/api/v1/ping')['status']);
-        $this->assertCount(1, $this->waitForVisits(1), 'A timeout must not trigger another delivery on the next page');
+        $this->assertSame([], $this->requests());
+        $this->assertTrue($this->job('botwarden-flush-visits', 'timeout', ['dark_visitors' => ['report_visits' => true]])['success']);
         $this->assertSame('1', \Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_failed'));
-        $retryAfter = (int)\Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_retry_after');
-        $this->assertGreaterThan(time(), $retryAfter);
-        $this->assertLessThanOrEqual(time() + 300, $retryAfter);
-
-        \Grav\Plugin\Botwarden\BotwardenDatabase::setMeta($this->db, 'visits_retry_after', (string)(time() - 1));
+        $detail = json_decode(\Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_last_diagnostics'), true);
+        $this->assertSame(28, $detail['curl_error']);
         $this->assertSame(200, self::http('/')['status']);
         $this->assertSame(200, self::http('/api/v1/ping')['status']);
-        $this->assertCount(2, $this->waitForVisits(2));
-        $this->assertSame('1', \Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_accepted'));
+        $this->assertSame(2, (int)$this->db->querySingle('SELECT COUNT(*) FROM visit_queue'));
+        $this->assertTrue($this->job('botwarden-flush-visits', 'valid', ['dark_visitors' => ['report_visits' => true]])['success']);
+        $this->assertCount(1, $this->requests(), 'No delivery may occur during backoff');
+        \Grav\Plugin\Botwarden\BotwardenDatabase::setMeta($this->db, 'visits_retry_after', (string)(time() - 1));
+        $this->assertTrue($this->job('botwarden-flush-visits', 'valid', ['dark_visitors' => ['report_visits' => true]])['success']);
+        $this->assertSame(0, (int)$this->db->querySingle('SELECT COUNT(*) FROM visit_queue'));
+        $this->assertSame('2', \Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_accepted'));
         $this->assertSame('0', \Grav\Plugin\Botwarden\BotwardenDatabase::getMeta($this->db, 'visits_retry_after'));
+        $batches = $this->requests(); $this->assertCount(2, $batches);
+        $this->assertCount(2, json_decode($batches[1]['body'], true));
     }
 
     public function testDefaultAndEnabledSchedulerJobs(): void

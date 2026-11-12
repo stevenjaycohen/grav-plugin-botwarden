@@ -140,6 +140,24 @@ function dashboardFor(legacy, post, stats = {}) {
   });
 }
 
+test('visit delivery health exposes queued work, retry time and safe diagnostics as text', async () => {
+  const fixture = dashboardFor({}, undefined, {
+    visit_reporting: 'degraded; last delivery attempt failed',
+    visit_error: 'HTTP 502',
+    visit_diagnostics: {status:502, headers:{'x-request-id':'<fixture-id>'}, total_ms:24},
+    delivery: {visits_pending:17, visits_dropped:2, visits_retry_after:1700000000, visits_last_success:0},
+  });
+  await fixture.refresh();
+  const text = fixture.elements.delivery.textContent;
+  assert.match(text, /degraded/);
+  assert.match(text, /Visits queued: 17/);
+  assert.match(text, /Visits rejected: 2/);
+  assert.ok(text.includes(new Date(1700000000 * 1000).toLocaleString()));
+  assert.match(text, /HTTP 502/);
+  assert.match(text, /<fixture-id>/);
+  assert.equal(fixture.elements.delivery.innerHTML, undefined);
+});
+
 test('proxy warning displays as text and clears after configuration is corrected', async () => {
   const stats = { proxy_warning: 'Configure Trusted Proxies <script>untrusted</script>' };
   const fixture = dashboardFor({ migration_complete: true }, undefined, stats);

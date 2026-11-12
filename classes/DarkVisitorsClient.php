@@ -4,18 +4,38 @@ namespace Grav\Plugin\Botwarden;
 /** Known Agents (formerly Dark Visitors) robots-txts and visits APIs. */
 final class DarkVisitorsClient
 {
+    public array $lastVisitDiagnostics = [];
     public function __construct(private string $apiKey) {}
 
     /** Send one visit as the batch required by the REST API. */
     public function reportVisit(array $visit): void
     {
+        $this->reportVisits([$visit]);
+    }
+
+    /** Send a small batch; only HTTP 204 acknowledges the entire batch. */
+    public function reportVisits(array $visits, int $timeout = 3): void
+    {
+        $this->lastVisitDiagnostics = [];
         if (trim($this->apiKey) === '') {
             throw new \RuntimeException('Known Agents project access token missing');
         }
-        $response = HttpClient::request('POST', 'https://api.knownagents.com/visits',
-            ['Authorization: Bearer ' . $this->apiKey, 'Content-Type: application/json'],
-            json_encode([$visit], JSON_THROW_ON_ERROR), 3
-        );
+        if (!$visits || !array_is_list($visits) || count($visits) > 25) {
+            throw new \InvalidArgumentException('Known Agents visit batch must contain 1–25 events');
+        }
+        $body = json_encode($visits, JSON_THROW_ON_ERROR);
+        try {
+            $response = HttpClient::request('POST', 'https://api.knownagents.com/visits',
+                ['Authorization: Bearer ' . $this->apiKey, 'Content-Type: application/json'],
+                $body, max(1, min(3, $timeout)), true);
+        } finally {
+            // Never retain a response body, request headers, or the configured token in diagnostics.
+            $detail = HttpClient::diagnostics();
+            array_walk_recursive($detail, function (&$value): void {
+                if (is_string($value)) $value = str_replace($this->apiKey, '[redacted]', $value);
+            });
+            $this->lastVisitDiagnostics = $detail;
+        }
         if ($response['status'] !== 204) {
             throw new \RuntimeException('Known Agents visits HTTP ' . $response['status'] . ' (expected 204)');
         }

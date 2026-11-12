@@ -12,7 +12,7 @@ use Grav\Common\Filesystem\Folder;
 class BotwardenDatabase
 {
     /** Bump when the schema or a migration changes; gates createSchema(). */
-    private const SCHEMA_VERSION = 4;
+    private const SCHEMA_VERSION = 5;
 
     private static ?SQLite3 $instance = null;
 
@@ -129,9 +129,16 @@ class BotwardenDatabase
 
         $db->exec('CREATE INDEX IF NOT EXISTS idx_history_acted_at ON history(acted_at DESC)');
 
+        $db->exec('CREATE TABLE IF NOT EXISTS visit_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            payload TEXT NOT NULL CHECK(length(CAST(payload AS BLOB)) <= 8192),
+            queued_at INTEGER NOT NULL
+        )');
+        $db->exec('CREATE INDEX IF NOT EXISTS idx_visit_queue_queued_at ON visit_queue(queued_at)');
+
         // Migrations for DBs created before the current version (CREATE IF NOT
         // EXISTS won't alter an existing table):
-        //   v2: `local.is_manual`   v3: `report_queue.attempts`   v4: `history`
+        //   v2: `local.is_manual`   v3: `report_queue.attempts`   v4: `history`   v5: `visit_queue`
         self::addColumnIfMissing($db, 'local', 'is_manual', 'INTEGER NOT NULL DEFAULT 0');
         self::addColumnIfMissing($db, 'report_queue', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
 

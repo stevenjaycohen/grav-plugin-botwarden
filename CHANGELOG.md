@@ -1,3 +1,16 @@
+# 1.3.0
+## 2026-11-12
+
+1. [](#new)
+    * Queue Known Agents visit reports in the existing SQLite database and deliver them through a new every-minute scheduler job, removing outbound reporting from visitor workers. Grav's scheduler must be triggered regularly for delivery.
+    * Bound queued visits to 10,000 entries, 8 KiB per entry and 24-hour retention. Deliver batches of up to 25 with a 200-visit, 20-second flush budget, three-second request timeouts and ownership-fenced worker leases.
+    * Show pending visits, delivery counters, retry time, last success and safe HTTP/cURL timing and response-header diagnostics on the dashboard. Exclude request headers and response bodies from diagnostics and redact the configured project token.
+
+2. [](#bugfix)
+    * Retain failed batches with retry delays of 5, 10, 20, 40 and 60 minutes, honoring longer provider Retry-After values within the retention window. Log the first failure, at most one continuing-outage summary per hour and one recovery notice.
+    * Preserve queued visits during concurrent capture and delivery, reject oversized or invalid events, expire stale visits before sending, and retain unacknowledged batches without repeated provider-failure scheduler exceptions. Retried analytics events can be duplicated after an ambiguous timeout.
+    * Initialize synthetic authentication sessions through Grav's session API so authorization regressions continue working after the session-binding migration grace period expires.
+
 # 1.2.8
 ## 2026-11-11
 

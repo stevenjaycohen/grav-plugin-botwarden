@@ -30,13 +30,17 @@ namespace {
 
     if (PHP_SAPI === 'cli-server') {
         header('Content-Type: application/json');
+        header('X-Request-Id: fixture-response-id');
+        header('Via: fixture-gateway');
+        header('Set-Cookie: SECRET-fixture-cookie');
         $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|rate_limit|not_found|oversized|category_rules|timeout)(?:/v1/decisions)?$~', $path, $match)) {
+        if (!preg_match('~^/mock/(bulk|agents|visits|cti|lapi|report)/(valid|block|clean|empty|malformed|unauthorized|server_error|bad_gateway|reflected|rate_limit|not_found|oversized|category_rules|timeout)(?:/v1/decisions)?$~', $path, $match)) {
             http_response_code(404);
             echo '{}';
             return;
         }
         [$all, $service, $scenario] = $match;
+        if ($scenario === 'reflected') header('X-Request-Id: synthetic-fixture-key');
         $body = file_get_contents('php://input');
         file_put_contents($work . '/requests.jsonl', json_encode([
             'service' => $service, 'scenario' => $scenario,
@@ -46,8 +50,8 @@ namespace {
             'project_token_matches' => ($_SERVER['HTTP_AUTHORIZATION'] ?? '') === 'Bearer synthetic-fixture-key',
         ], JSON_THROW_ON_ERROR) . "\n", FILE_APPEND | LOCK_EX);
         if ($scenario === 'timeout') sleep(4);
-        if (in_array($scenario, ['unauthorized', 'server_error', 'rate_limit', 'not_found'], true)) {
-            http_response_code(['unauthorized' => 401, 'server_error' => 503, 'rate_limit' => 429, 'not_found' => 404][$scenario]);
+        if (in_array($scenario, ['unauthorized', 'server_error', 'bad_gateway', 'rate_limit', 'not_found'], true)) {
+            http_response_code(['unauthorized' => 401, 'server_error' => 503, 'bad_gateway' => 502, 'rate_limit' => 429, 'not_found' => 404][$scenario]);
             echo '{"error":"synthetic upstream failure"}';
             return;
         }
@@ -78,10 +82,14 @@ namespace {
             $visits = json_decode($body, true);
             if ($_SERVER['REQUEST_METHOD'] !== 'POST' || ($_SERVER['CONTENT_TYPE'] ?? '') !== 'application/json'
                 || ($_SERVER['HTTP_AUTHORIZATION'] ?? '') !== 'Bearer synthetic-fixture-key'
-                || !is_array($visits) || !array_is_list($visits) || count($visits) !== 1
-                || !isset($visits[0]['request_path'], $visits[0]['request_method'], $visits[0]['request_headers'])) {
+                || !is_array($visits) || !array_is_list($visits) || count($visits) < 1 || count($visits) > 25) {
                 http_response_code(400);
                 return;
+            }
+            foreach ($visits as $visit) {
+                if (!isset($visit['request_path'], $visit['request_method'], $visit['request_headers'])) {
+                    http_response_code(400); return;
+                }
             }
             http_response_code(204);
             return;
@@ -176,13 +184,14 @@ namespace {
             }
         }
         $result = ['complete' => true];
-    } elseif ($operation === 'visit') {
+    } elseif ($operation === 'visit' || $operation === 'visit-diagnostics') {
         $client = new Grav\Plugin\Botwarden\DarkVisitorsClient('synthetic-fixture-key');
         $client->reportVisit(Grav\Plugin\Botwarden\DarkVisitorsClient::visit([
             'REQUEST_URI' => '/fixture-visit?token=private', 'REQUEST_METHOD' => 'GET',
             'HTTP_USER_AGENT' => 'FixtureAgent',
         ]));
         $result = ['accepted' => true];
+        if ($operation === 'visit-diagnostics') $result['diagnostics'] = $client->lastVisitDiagnostics;
     } elseif ($operation === 'cti' || $operation === 'lapi') {
         $db = Grav\Plugin\Botwarden\BotwardenDatabase::getInstance($host . '/user/data/botwarden');
         $client = new Grav\Plugin\Botwarden\CrowdSecClient($config['crowdsec'], $db);
