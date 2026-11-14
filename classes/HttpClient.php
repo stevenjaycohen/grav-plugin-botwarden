@@ -51,7 +51,7 @@ final class HttpClient
                 CURLOPT_CUSTOMREQUEST => strtoupper($method),
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_USERAGENT => 'botWarden/1.3.0',
+                CURLOPT_USERAGENT => 'botWarden/1.3.1',
             ];
             if ($collectDiagnostics) {
                 $options[CURLOPT_HEADERFUNCTION] = static function ($handle, string $line) use (&$responseHeaders): int {

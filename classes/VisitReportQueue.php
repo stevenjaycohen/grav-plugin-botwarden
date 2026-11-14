@@ -104,6 +104,12 @@ final class VisitReportQueue
                         $this->set('visits_retry_after', $now + $delay);
                         $error = !empty($detail['curl_error']) ? 'HTTP transport error (' . $detail['curl_error'] . ')'
                             : (!empty($detail['status']) ? 'HTTP ' . $detail['status'] : 'Delivery did not acknowledge the batch');
+                        if (empty($detail['curl_error']) && ($detail['status'] ?? 0) === 402.0) {
+                            $error = 'Known Agents reporting is blocked by a plan or billing limit (HTTP 402). '
+                                . 'Check your Known Agents project dashboard for usage, allowance reset date, and billing. '
+                                . 'Upgrade, wait for the allowance to reset, or disable "Report Visits to Known Agents" in botWarden. '
+                                . 'Queued visits expire after 24 hours';
+                        }
                         $this->set('visits_last_error', $error);
                         if ($streak === 1) $this->set('visits_outage_started', $now);
                         if ($streak === 1 || $now - (int)$this->meta('visits_last_warning') >= 3600) {

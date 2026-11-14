@@ -1,3 +1,9 @@
+# 1.3.1
+## 2026-11-14
+
+1. [](#bugfix)
+    * Explain Known Agents HTTP 402 visit-reporting failures as a plan or billing limit in warnings and dashboard errors. Direct owners to check project usage, allowance reset date and billing, with options to upgrade, wait for the allowance reset or disable visit reporting. State the existing 24-hour queue retention limit.
+
 # 1.3.0
 ## 2026-11-12
 

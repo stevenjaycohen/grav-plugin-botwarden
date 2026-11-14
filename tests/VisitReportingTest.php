@@ -89,6 +89,24 @@ final class VisitReportingTest extends TestCase
         $this->assertSame([], $this->queue->flush(static function (): void {})['events']);
     }
 
+    public function testPaymentRequiredExplainsTheLimitAndActionsWithoutDiscardingVisits(): void
+    {
+        $this->queue->enqueue($this->visit());
+        $result = $this->queue->flush(static fn () => false, static fn () => ['status' => 402, 'curl_error' => 0]);
+        $this->assertSame('degraded', $result['state']);
+        $this->assertSame(1, $result['pending']);
+        $this->assertSame($this->now + 300, $result['retry_after']);
+        $this->assertCount(1, $result['events']);
+        $this->assertSame('warning', $result['events'][0]['level']);
+        $error = BotwardenDatabase::getMeta($this->db, 'visits_last_error');
+        $this->assertStringContainsString('plan or billing limit (HTTP 402)', $error);
+        $this->assertStringContainsString('project dashboard', $error);
+        $this->assertStringContainsString('allowance reset date', $error);
+        $this->assertStringContainsString('disable "Report Visits to Known Agents"', $error);
+        $this->assertStringContainsString('Queued visits expire after 24 hours', $error);
+        $this->assertStringContainsString($error, $result['events'][0]['message']);
+    }
+
     public function testRetryAfterIsHonoredAndExpiredVisitsAreNotDelivered(): void
     {
         $this->queue->enqueue($this->visit());
